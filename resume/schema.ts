@@ -1,0 +1,3 @@
+import { z } from 'zod';
+const entry = z.object({ id: z.string() }).catchall(z.any());
+export const resumeSchema = z.object({ id: z.string(), updatedAt: z.string(), personal: z.object({ name: z.string(), title: z.string(), email: z.string(), phone: z.string(), location: z.string(), linkedin: z.string(), github: z.string(), website: z.string() }), profile: z.string(), experience: z.array(entry), education: z.array(entry), projects: z.array(entry), skills: z.array(entry), certifications: z.array(entry), achievements: z.array(entry), links: z.array(entry), custom: z.array(entry), sectionsOrder: z.array(z.string()), hiddenSections: z.array(z.string()), settings: z.record(z.string(), z.any()) });
