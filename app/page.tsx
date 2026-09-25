@@ -1,69 +1,90 @@
-import Image from "next/image";
+'use client';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useResumeStore } from '@/store/resumeStore';
+import { loadResume, saveResume } from '@/storage/indexedDb';
+import type { Entry, EntryValue, Resume, SectionKey } from '@/resume/types';
+import RichEditor from '@/components/rich-text/RichEditor';
+import RichTextView, { richTextIsEmpty } from '@/components/rich-text/RichTextView';
+import { paginateMeasuredSections, type MeasuredSection, type PageChunk } from '@/renderer/paginationEngine';
+import { fontRegistry, templateRegistry } from '@/templates/registry';
 
-export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+const sections: { id: SectionKey; title: string; field: keyof Resume; optional: boolean }[] = [
+  { id:'profile', title:'Profile', field:'profile', optional:true }, { id:'experience', title:'Experience', field:'experience', optional:true }, { id:'education', title:'Education', field:'education', optional:true }, { id:'projects', title:'Projects', field:'projects', optional:true }, { id:'skills', title:'Skills', field:'skills', optional:true }, { id:'certifications', title:'Certifications', field:'certifications', optional:true }, { id:'achievements', title:'Achievements', field:'achievements', optional:true }, { id:'links', title:'Links', field:'links', optional:true }, { id:'custom', title:'Custom sections', field:'custom', optional:true }
+];
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function safeUrl(v:string){ return /^https?:\/\//i.test(v) ? v : `https://${v}`; }
+
+export default function Home(){
+ const {resume,update,restore,ready,undo,redo,canUndo,canRedo}=useResumeStore(); const [active,setActive]=useState<SectionKey>('experience'); const [tab,setTab]=useState<'edit'|'preview'>('edit'); const [saving,setSaving]=useState('Saved'); const [openSettings,setOpenSettings]=useState(false); const [editPersonal,setEditPersonal]=useState(false); const [zoom,setZoom]=useState(100);
+ useEffect(()=>{ loadResume().then(restore); },[restore]);
+ useEffect(()=>{ if(!ready)return; const t=setTimeout(()=>{setSaving('Savingâ€¦');saveResume(resume).then(()=>setSaving('Saved'));},450); return ()=>clearTimeout(t); },[resume,ready]);
+ const setSetting=(key:keyof Resume['settings'],value:string|number)=>update(r=>({...r,settings:{...r.settings,[key]:value}}));
+ function moveSection(id:SectionKey,delta:number){update(r=>{const order=[...r.sectionsOrder],i=order.indexOf(id),j=i+delta;if(j<0||j>=order.length)return r;[order[i],order[j]]=[order[j],order[i]];return {...r,sectionsOrder:order};});}
+ function setPersonal(key:keyof Resume['personal'],value:string){update(r=>({...r,personal:{...r.personal,[key]:value}}));}
+ function addEntry(id:SectionKey){update(r=>{if(id==='profile')return {...r,profile:{...r.profile,content:[...r.profile.content,{type:'paragraph',content:[]}]}};const list=r[id] as Entry[];const blank={type:'doc' as const,content:[]};const typeDefaults:Record<string,Entry>={experience:{id:uid(),title:'',company:'',location:'',start:'',end:'',current:false,description:blank,bullets:[],url:''},education:{id:uid(),degree:'',institution:'',location:'',start:'',end:'',grade:'',description:blank},projects:{id:uid(),name:'',role:'',technologies:'',description:blank,bullets:[],github:'',live:''},skills:{id:uid(),category:'New category',items:[]},certifications:{id:uid(),name:'',issuer:'',date:'',credentialId:'',url:''},achievements:{id:uid(),title:'',description:blank,date:''},links:{id:uid(),label:'',url:''},custom:{id:uid(),title:'New section',content:''}}; return {...r,[id]:[...list,typeDefaults[id]]};});}
+ function changeEntry(id:SectionKey, entryId:string,key:string,value:EntryValue){if(key==='__order'){update(r=>({...r,[id]:value as unknown as Entry[]}));return;}update(r=>({...r,[id]:(r[id] as Entry[]).map(e=>e.id===entryId?{...e,[key]:value}:e)}));}
+ function deleteEntry(id:SectionKey,entryId:string){update(r=>({...r,[id]:(r[id] as Entry[]).filter(e=>e.id!==entryId)}));}
+ const visibleSections=resume.sectionsOrder.map(id=>sections.find(s=>s.id===id)).filter(Boolean) as typeof sections;
+ const font=fontRegistry.find(f=>f.id===resume.settings.font)?.css||fontRegistry[0].css;
+ return <main className="app-shell">
+  <header className="topbar"><a className="brand" href="#"><span className="brand-mark">f</span> folio<span className="brand-dot">.</span></a><div className="doc-title"><strong>Product Designer Resume</strong><span>{saving} Â· Saved on this device</span></div><div className="top-actions"><button className="icon-button" aria-label="Undo" disabled={!canUndo} onClick={undo}>â†¶</button><button className="icon-button" aria-label="Redo" disabled={!canRedo} onClick={redo}>â†·</button><button className="secondary-button" onClick={()=>window.print()}>Export PDF <span>â†—</span></button><button className="avatar" aria-label="Local resume">AM</button></div></header>
+  <div className="mobile-tabs"><button className={tab==='edit'?'selected':''} onClick={()=>setTab('edit')}>Edit resume</button><button className={tab==='preview'?'selected':''} onClick={()=>setTab('preview')}>Preview</button></div>
+  <div className="workspace">
+   <aside className={`editor ${tab==='preview'?'mobile-hide':''}`}><div className="editor-heading"><div><p className="eyebrow">YOUR DOCUMENT</p><h1>Build your resume</h1></div><span className="autosave">â— {saving}</span></div>
+    <div className="person-card"><div className="person-avatar">{resume.personal.name.split(' ').map(x=>x[0]).slice(0,2).join('')}</div><div className="person-info"><strong>{resume.personal.name||'Your name'}</strong><span>{resume.personal.title||'Professional title'}</span></div><button onClick={()=>setEditPersonal(!editPersonal)} aria-label="Edit personal details">âœŽ</button></div>
+    {editPersonal&&<div className="personal-fields">{(['name','title','email','phone','location','linkedin','github','website'] as const).map(k=><label key={k}>{({name:'Full name',title:'Professional title',email:'Email',phone:'Phone',location:'Location',linkedin:'LinkedIn',github:'GitHub',website:'Website'})[k]}<input aria-label={({name:'Full name',title:'Professional title',email:'Email',phone:'Phone',location:'Location',linkedin:'LinkedIn',github:'GitHub',website:'Website'})[k]} value={resume.personal[k]} onChange={e=>setPersonal(k,e.target.value)}/></label>)}</div>}
+    <div className="section-list"><div className="list-heading"><span>RESUME SECTIONS</span><button onClick={()=>{const id=sections.find(s=>!resume.sectionsOrder.includes(s.id))?.id;if(id)update(r=>({...r,sectionsOrder:[...r.sectionsOrder,id]}));else addEntry('custom');}}>ï¼‹ Add section</button></div>
+    {visibleSections.map(s=><div className={`section-card ${active===s.id?'is-active':''}`} key={s.id}><div className="section-card-head"><button className="section-open" onClick={()=>setActive(active===s.id?'profile':s.id)}><span className="section-icon">{({profile:'âœ¦',experience:'â–¤',education:'âŒ‚',projects:'â—«',skills:'âŒ˜',certifications:'â™§',achievements:'âœ§',links:'â†—',custom:'ï¼‹'} as Record<string,string>)[s.id]}</span><strong>{s.title}</strong><span className="count">{s.id==='profile'?(resume.profile?1:0):(resume[s.field] as Entry[]).length}</span></button><div className="section-actions"><button title="Move up" onClick={()=>moveSection(s.id,-1)}>â†‘</button><button title="Move down" onClick={()=>moveSection(s.id,1)}>â†“</button><button title="Hide section" onClick={()=>update(r=>({...r,hiddenSections:r.hiddenSections.includes(s.id)?r.hiddenSections.filter(x=>x!==s.id):[...r.hiddenSections,s.id]}))}>{resume.hiddenSections.includes(s.id)?'â—‰':'â—Œ'}</button></div></div>
+      {active===s.id&&<div className="section-body">{s.id==='profile'?<><label>Summary</label><RichEditor value={resume.profile} onChange={value=>update(r=>({...r,profile:value}))}/></>:<>
+       {s.id==='experience'&&<EntryFields list={resume.experience} keys={['title','company','location','start','end','current','description','bullets','url']} labels={{title:'Job title',company:'Company',location:'Location',start:'Start date',end:'End date',current:'Current position',description:'Description',bullets:'Impact bullets (one per line)',url:'Company URL'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,v)} onDelete={eid=>deleteEntry(s.id,eid)} />}
+       {s.id==='education'&&<EntryFields list={resume.education} keys={['degree','institution','location','start','end','grade','description']} labels={{degree:'Degree',institution:'Institution',location:'Location',start:'Start date',end:'End date',grade:'Grade',description:'Description'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,v)} onDelete={eid=>deleteEntry(s.id,eid)} />}
+       {s.id==='projects'&&<EntryFields list={resume.projects} keys={['name','role','technologies','description','bullets','github','live']} labels={{name:'Project name',role:'Your role',technologies:'Technologies',description:'Description',bullets:'Highlights (one per line)',github:'GitHub URL',live:'Live / demo URL'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,v)} onDelete={eid=>deleteEntry(s.id,eid)} />}
+       {s.id==='skills'&&<><div className="field-row"><label>Display style<select value={resume.settings.skillsLayout} onChange={e=>setSetting('skillsLayout',e.target.value)}><option value="tags">Tags</option><option value="inline">Inline</option><option value="grouped">Grouped</option><option value="columns">Compact columns</option></select></label></div><EntryFields list={resume.skills} keys={['category','items']} labels={{category:'Category',items:'Skills (comma separated)'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,k==='items'?String(v).split(',').map(x=>x.trim()).filter(Boolean):v)} onDelete={eid=>deleteEntry(s.id,eid)} /></>}
+       {s.id==='certifications'&&<EntryFields list={resume.certifications} keys={['name','issuer','date','credentialId','url']} labels={{name:'Certification',issuer:'Issuer',date:'Date',credentialId:'Credential ID',url:'Credential URL'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,v)} onDelete={eid=>deleteEntry(s.id,eid)} />}
+       {s.id==='achievements'&&<EntryFields list={resume.achievements} keys={['title','description','date']} labels={{title:'Achievement',description:'Description',date:'Date'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,v)} onDelete={eid=>deleteEntry(s.id,eid)} />}
+       {s.id==='links'&&<EntryFields list={resume.links} keys={['label','url']} labels={{label:'Label',url:'URL'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,v)} onDelete={eid=>deleteEntry(s.id,eid)} />}
+       {s.id==='custom'&&<EntryFields list={resume.custom} keys={['title','content']} labels={{title:'Section title',content:'Content'}} onChange={(eid,k,v)=>changeEntry(s.id,eid,k,v)} onDelete={eid=>deleteEntry(s.id,eid)} />}
+       <button className="add-entry" onClick={()=>addEntry(s.id)}>ï¼‹ Add {s.id==='experience'?'position':s.id==='education'?'education':s.id==='projects'?'project':s.id==='skills'?'skill category':'item'}</button></>}</div>}
+     </div>)}
+    </div><button className="customize-toggle" onClick={()=>setOpenSettings(!openSettings)}><span>âš™</span> Customize design <span className="chevron">{openSettings?'âŒƒ':'âŒ„'}</span></button>
+    {openSettings&&<div className="settings-panel"><label>Template<select aria-label="Template" value={resume.settings.template} onChange={e=>setSetting('template',e.target.value)}>{templateRegistry.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label><a href="/templates" className="browse-link">Browse all templates â†’</a><label>Font<select value={resume.settings.font} onChange={e=>setSetting('font',e.target.value)}>{fontRegistry.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></label><div className="setting-pair"><label>Body size ({resume.settings.bodySize}px)<input aria-label="Body size" type="range" min="14" max="18" value={resume.settings.bodySize} onChange={e=>setSetting('bodySize',+e.target.value)}/></label><label>Name size ({resume.settings.nameSize} pt)<input aria-label="Name size" type="range" min="24" max="42" value={resume.settings.nameSize} onChange={e=>setSetting('nameSize',+e.target.value)}/></label></div><div className="setting-pair"><label>Heading size ({resume.settings.headingSize} pt)<input aria-label="Heading size" type="range" min="12" max="18" value={resume.settings.headingSize} onChange={e=>setSetting('headingSize',+e.target.value)}/></label><label>Title size ({resume.settings.titleSize} pt)<input aria-label="Title size" type="range" min="12" max="20" value={resume.settings.titleSize} onChange={e=>setSetting('titleSize',+e.target.value)}/></label></div><div className="setting-pair"><label>Page margin<input aria-label="Page margin" type="range" min="10" max="28" value={resume.settings.margin} onChange={e=>setSetting('margin',+e.target.value)}/></label><label>Section spacing<input aria-label="Section spacing" type="range" min="8" max="28" value={resume.settings.sectionGap} onChange={e=>setSetting('sectionGap',+e.target.value)}/></label></div><div className="setting-pair"><label>Entry spacing<input aria-label="Entry spacing" type="range" min="6" max="24" value={resume.settings.entryGap} onChange={e=>setSetting('entryGap',+e.target.value)}/></label><label>Line height<input aria-label="Line height" type="range" min="1.1" max="1.8" step=".1" value={resume.settings.lineHeight} onChange={e=>setSetting('lineHeight',+e.target.value)}/></label></div><div className="setting-pair"><label>Accent color <input aria-label="Accent color" type="color" value={resume.settings.accent} onChange={e=>setSetting('accent',e.target.value)}/></label><label>Divider color <input aria-label="Divider color" type="color" value={resume.settings.divider} onChange={e=>setSetting('divider',e.target.value)}/></label></div><label>Text color <input aria-label="Text color" type="color" value={resume.settings.text} onChange={e=>setSetting('text',e.target.value)}/></label><label>Letter spacing<input aria-label="Letter spacing" type="range" min="-1" max="2" step=".1" value={resume.settings.letterSpacing} onChange={e=>setSetting('letterSpacing',+e.target.value)}/></label><label>Divider style<select value={resume.settings.dividerStyle} onChange={e=>setSetting('dividerStyle',e.target.value)}><option value="none">No divider</option><option value="thin">Thin</option><option value="medium">Medium</option><option value="styled">Styled</option></select></label><label>Header layout<select value={resume.settings.headerLayout} onChange={e=>setSetting('headerLayout',e.target.value)}><option value="left">Left aligned</option><option value="center">Centered</option></select></label></div>}
+   </aside>
+   <section className={`preview-area ${tab==='edit'?'mobile-hide':''}`}><div className="preview-toolbar"><div className="page-switch"><button className="selected">Resume</button><button disabled title="Cover letters are not part of Stage 1">Cover letter <span className="soon">SOON</span></button></div><div className="zoom-controls"><span>LIVE PREVIEW</span><button aria-label="Zoom out" onClick={()=>setZoom(v=>Math.max(60,v-10))}>âˆ’</button><span>{zoom}%</span><button aria-label="Zoom in" onClick={()=>setZoom(v=>Math.min(130,v+10))}>ï¼‹</button><button aria-label="Reset zoom" onClick={()=>setZoom(100)}>â›¶</button></div></div><div className="canvas-scroll"><ResumePreview resume={resume} font={font} zoom={zoom}/></div><div className="preview-footer"><span><i/> Live preview Â· autosaved</span><span>A4 Â· {resume.settings.template.toUpperCase()} TEMPLATE</span></div></section>
+  </div>
+ </main>
 }
+
+function EntryFields({list,keys,labels,onChange,onDelete}:{list:Entry[];keys:string[];labels:Record<string,string>;onChange:(id:string,key:string,value:EntryValue)=>void;onDelete:(id:string)=>void}) {
+ return <div className="entries">{list.map((entry,i)=><div className="entry-card" key={entry.id}>
+  <div className="entry-title"><strong>{String(entry[keys[0]]||`New ${labels[keys[0]]}`)}</strong><button aria-label={`Delete ${String(entry[keys[0]]||'item')}`} onClick={()=>onDelete(entry.id)} title="Delete item">x</button></div>
+  {keys.map(k=><label key={k}>{labels[k]}{k==='current'?<input type="checkbox" checked={Boolean(entry[k])} onChange={e=>onChange(entry.id,k,e.target.checked)}/>:k==='description'&&entry[k]&&typeof entry[k]==='object'&&!Array.isArray(entry[k])?<RichEditor value={entry[k] as Resume['profile']} onChange={value=>onChange(entry.id,k,value)}/>:k==='bullets'||k==='items'||k==='description'||k==='content'?<textarea rows={k==='bullets'||k==='items'?2:3} value={Array.isArray(entry[k])?entry[k].join(k==='items'?', ':'\n'):String(entry[k]||'')} onChange={e=>onChange(entry.id,k,e.target.value)}/>:<input value={String(entry[k]||'')} onChange={e=>onChange(entry.id,k,e.target.value)} placeholder={labels[k]}/>}</label>)}
+  <div className="entry-move"><button disabled={i===0} onClick={()=>{if(i>0){const copy=[...list];[copy[i-1],copy[i]]=[copy[i],copy[i-1]];onChange(entry.id,'__order',copy as unknown as string[]);}}}>Move up</button><button disabled={i===list.length-1} onClick={()=>{if(i<list.length-1){const copy=[...list];[copy[i+1],copy[i]]=[copy[i],copy[i+1]];onChange(entry.id,'__order',copy as unknown as string[]);}}}>Move down</button></div>
+ </div>)}</div>;
+}
+
+function ResumePreview({resume:r,font,zoom}:{resume:Resume;font:string;zoom:number}){
+ const measureRef=useRef<HTMLDivElement>(null);const [mainPages,setMainPages]=useState<PageChunk[][]>([]);const [sidePages,setSidePages]=useState<PageChunk[][]>([]);
+ const template=r.settings.template; const {two,mainSections,sideSections}=useMemo(()=>{const twoColumn=['modern','sidebar'].includes(template);const side:SectionKey[]=['skills','education','certifications','links'];const ordered=r.sectionsOrder.filter(id=>!r.hiddenSections.includes(id));return {two:twoColumn,mainSections:ordered.filter(id=>!twoColumn||!side.includes(id)),sideSections:ordered.filter(id=>twoColumn&&side.includes(id))};},[template,r.sectionsOrder,r.hiddenSections]);
+ const paperStyle={fontFamily:font,fontSize:`${r.settings.bodySize}px`,lineHeight:r.settings.lineHeight,padding:`${r.settings.margin}mm`,letterSpacing:`${r.settings.letterSpacing}px`,'--accent':r.settings.accent,'--divider':r.settings.divider,'--ink':r.settings.text,'--heading':r.settings.text,'--section-gap':`${r.settings.sectionGap}px`,'--entry-gap':`${r.settings.entryGap}px`,'--name-size':`${r.settings.nameSize}px`,'--title-size':`${r.settings.titleSize}px`,'--heading-size':`${r.settings.headingSize}px`} as React.CSSProperties;
+ const header=<ResumeHeader resume={r}/>;
+ useEffect(()=>{const root=measureRef.current;if(!root)return;const measure=()=>{const main=root.querySelector<HTMLElement>('.measure-main');const sideColumn=root.querySelector<HTMLElement>('.measure-sidebar');const getSections=(column:HTMLElement|null,ids:SectionKey[]):MeasuredSection[]=>ids.flatMap(id=>{const section=column?.querySelector<HTMLElement>(`[data-section-id="${id}"]`);if(!section)return[];const outer=(el:HTMLElement)=>el.offsetHeight+(parseFloat(getComputedStyle(el).marginTop)||0)+(parseFloat(getComputedStyle(el).marginBottom)||0);const heading=section.querySelector<HTMLElement>('h2');const entries=[...section.querySelectorAll<HTMLElement>('.resume-entry')].map(el=>({id:el.dataset.entryId||'',height:outer(el)}));return[{id,height:outer(section),headingHeight:heading?outer(heading):0,entries}];});const capacity=(297-2*r.settings.margin)*96/25.4;const headerHeight=root.querySelector<HTMLElement>('.resume-header')?.offsetHeight??0;setMainPages(paginateMeasuredSections(getSections(main,mainSections),capacity,headerHeight+r.settings.sectionGap));setSidePages(paginateMeasuredSections(getSections(sideColumn,sideSections),capacity));};const observer=new ResizeObserver(measure);observer.observe(root);root.querySelectorAll('.resume-section').forEach(el=>observer.observe(el));measure();return()=>observer.disconnect();},[r,mainSections,sideSections,two]);
+ const pageTotal=Math.max(1,mainPages.length,sidePages.length);const mainGroups:PageChunk[][]=mainPages.length?mainPages:[mainSections.map(id=>({id}))];const sideGroups:PageChunk[][]=sidePages.length?sidePages:[sideSections.map(id=>({id}))];
+ return <><div className="measurement-root" ref={measureRef} aria-hidden="true"><article className={`paper template-${template} divider-${r.settings.dividerStyle}`} style={paperStyle}><ResumeHeader resume={r}/><div className={two?'resume-columns':''}>{two&&<aside className="resume-sidebar measure-sidebar">{sideSections.map(id=><ResumeSection key={id} id={id} resume={r}/>)}</aside>}<div className="resume-main measure-main">{mainSections.map(id=><ResumeSection key={id} id={id} resume={r}/>)}</div></div></article></div>{Array.from({length:pageTotal},(_,index)=><div className="page-frame" key={index} style={{height:`calc(297mm * ${zoom/100})`}}><article className={`paper template-${template} divider-${r.settings.dividerStyle}`} style={{...paperStyle,minHeight:'297mm',transform:`scale(${zoom/100})`}}>{index===0&&header}<div className={two?'resume-columns':''}>{two&&<aside className="resume-sidebar">{(sideGroups[index]??[]).map((chunk,i)=><ResumeSection key={`${chunk.id}-${i}`} id={chunk.id as SectionKey} resume={r} entryIds={chunk.entryIds} headingOnly={chunk.headingOnly}/>)}</aside>}<div className="resume-main">{(mainGroups[index]??[]).map((chunk,i)=><ResumeSection key={`${chunk.id}-${i}`} id={chunk.id as SectionKey} resume={r} entryIds={chunk.entryIds} headingOnly={chunk.headingOnly}/>)}</div></div></article></div>)}<span className="page-count" aria-live="polite">{pageTotal} {pageTotal===1?'page':'pages'}</span></>
+}
+function ResumeHeader({resume:r}:{resume:Resume}){return <header className={`resume-header header-${r.settings.headerLayout}`}><h1>{r.personal.name||'Your name'}</h1><p className="resume-title">{r.personal.title}</p><div className="contact-line">{[r.personal.email,r.personal.phone,r.personal.location,r.personal.linkedin,r.personal.github,r.personal.website].filter(Boolean).map((x,i)=><span key={i}>{x}</span>)}</div></header>}
+function ResumeSection({id,resume:r,entryIds,headingOnly}:{id:SectionKey;resume:Resume;entryIds?:string[];headingOnly?:boolean}){const data=r[id]; const title=sections.find(x=>x.id===id)?.title||'Section'; if(id==='profile')return !richTextIsEmpty(r.profile)?<section className="resume-section" data-section-id={id}><h2>{title}</h2><RichTextView value={r.profile}/></section>:null;
+ const entries=(data as Entry[]); if(!entries?.length)return null;if(headingOnly)return <section className="resume-section section-heading-only"><h2>{title}</h2></section>;const visibleEntries=entryIds?entries.filter(e=>entryIds.includes(e.id)):entries;
+ return <section className="resume-section" data-section-id={id}>{!entryIds&&<h2>{title}</h2>}{visibleEntries.map(e=><div className="resume-entry" data-entry-id={e.id} key={e.id}>
+  {id==='experience'&&<><div className="entry-head"><strong>{e.title}</strong><span>{e.start}{e.start&&(e.end||e.current)?' - ':''}{e.current?'Present':e.end}</span></div><div className="entry-sub"><b>{e.company}</b>{e.location&&` · ${e.location}`}</div><Description value={e.description}/><Bullets value={e.bullets}/></>}
+  {id==='education'&&<><div className="entry-head"><strong>{e.degree}</strong><span>{e.start}{e.start&&e.end?' â€“ ':''}{e.end}</span></div><div className="entry-sub"><b>{e.institution}</b>{e.location&&` Â· ${e.location}`}</div>{e.grade&&<p>{e.grade}</p>}{e.description&&<Description value={e.description}/>}</>}
+  {id==='projects'&&<><div className="entry-head"><strong>{e.name}</strong><span>{e.role}</span></div>{e.technologies&&<div className="entry-sub">{e.technologies}</div>}<Description value={e.description}/><Bullets value={e.bullets}/><WebLink value={e.live}/></>}
+  {id==='skills'&&<><strong>{e.category}</strong>{r.settings.skillsLayout==='tags'?<div className="skill-tags">{(Array.isArray(e.items)?e.items:String(e.items||'').split(',')).map((x,i)=><span key={i}>{x}</span>)}</div>:r.settings.skillsLayout==='columns'?<ul className="skill-columns">{(Array.isArray(e.items)?e.items:String(e.items||'').split(',')).filter(Boolean).map((x,i)=><li key={i}>{x}</li>)}</ul>:<p className="skill-list">{(Array.isArray(e.items)?e.items:String(e.items||'').split(',')).join(r.settings.skillsLayout==='inline'?' · ':', ')}</p>}</>}
+  {id==='certifications'&&<><div className="entry-head"><strong>{e.name}</strong><span>{e.date}</span></div><div className="entry-sub">{e.issuer}{e.credentialId&&` Â· ${e.credentialId}`}</div><WebLink value={e.url}/></>}
+  {id==='achievements'&&<><div className="entry-head"><strong>{e.title}</strong><span>{e.date}</span></div><Description value={e.description}/></>}
+  {id==='links'&&<><strong>{e.label}</strong> <WebLink value={e.url}/></>}
+  {id==='custom'&&<><strong>{e.title}</strong><p>{e.content}</p></>}
+ </div>)}</section>
+}
+function Description({value}:{value:EntryValue|undefined}){if(!value)return null;if(typeof value==='object'&&!Array.isArray(value)&&value.type==='doc')return <RichTextView value={value as Resume['profile']}/>;return <p>{String(value)}</p>;}
+function Bullets({value}:{value:unknown}){const items=Array.isArray(value)?value:String(value||'').split('\n');const clean=items.map(String).filter(x=>x.trim());return clean.length?<ul>{clean.map((x,i)=><li key={i}>{x}</li>)}</ul>:null;}
+function WebLink({value}:{value:unknown}){const v=String(value||'');return v?<a href={safeUrl(v)} target="_blank" rel="noreferrer">{v.replace(/^https?:\/\//,'')}</a>:null;}
