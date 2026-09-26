@@ -31,7 +31,7 @@ export function normalizeResume(value: unknown): Resume {
   candidate.personal = { ...base.personal, ...(candidate.personal as object) };
   candidate.settings = { ...base.settings, ...(candidate.settings as object) };
   const settings = candidate.settings as Record<string, unknown>;
-  for (const [key,min,max] of [['nameSize',24,48],['titleSize',12,22],['headingSize',12,20],['bodySize',14,18],['lineHeight',1.1,1.8],['letterSpacing',-1,2],['margin',10,28],['sectionGap',8,28],['entryGap',6,24]] as const) {
+  for (const [key,min,max] of [['nameSize',24,48],['titleSize',12,22],['headingSize',12,20],['bodySize',15,20],['lineHeight',1.1,1.8],['letterSpacing',-1,2],['margin',10,28],['sectionGap',8,28],['entryGap',6,24]] as const) {
     const value=Number(settings[key]);settings[key]=Number.isFinite(value)?Math.min(max,Math.max(min,value)):base.settings[key as keyof Resume['settings']];
   }
   if(!['modern','ats','classic','executive','sidebar'].includes(String(settings.template)))settings.template=base.settings.template;

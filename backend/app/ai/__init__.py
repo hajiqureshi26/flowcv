@@ -1,0 +1,1 @@
+"""Privacy-first AI processing for ephemeral Resume JSON requests."""

@@ -19,12 +19,21 @@ describe('resume foundation', () => {
     const rich={...defaultResume,profile:{type:'doc' as const,content:[{type:'paragraph',content:[{type:'text',text:'bold',marks:[{type:'bold'}]},{type:'text',text:' site',marks:[{type:'link',attrs:{href:'https://example.com'}}]}]}]}};
     expect(resumeSchema.safeParse(rich).success).toBe(true);
   });
+  it('validates email and resume links while allowing optional empty values',()=>{
+    const empty=structuredClone(defaultResume);
+    empty.personal.email='';empty.personal.linkedin='';
+    expect(resumeSchema.safeParse(empty).success).toBe(true);
+    const invalidEmail={...empty,personal:{...empty.personal,email:'not-an-email'}};
+    expect(resumeSchema.safeParse(invalidEmail).success).toBe(false);
+    const invalidLink={...empty,links:[{id:'link-bad',label:'Portfolio',url:'javascript:alert(1)'}]};
+    expect(resumeSchema.safeParse(invalidLink).success).toBe(false);
+  });
   it('migrates older text summaries and raises tiny stored fonts to the readable minimum',()=>{
     const old={...structuredClone(defaultResume),profile:'Previously saved summary',experience:defaultResume.experience.map((entry,index)=>index===0?{...entry,description:'Old plain description'}:entry),settings:{...defaultResume.settings,bodySize:9}};
     const normalized=normalizeResume(old);
     expect(normalized.profile.content[0].content?.[0].text).toBe('Previously saved summary');
     expect((normalized.experience[0].description as {content:{content:{text?:string}[]}[]} ).content[0].content[0].text).toBe('Old plain description');
-    expect(normalized.settings.bodySize).toBe(14);
+    expect(normalized.settings.bodySize).toBe(15);
   });
   it('computes one, two and three A4 pages from measured content height',()=>{
     const usable=A4.heightMm-36;const px=96/25.4;
