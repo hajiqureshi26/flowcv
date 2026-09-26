@@ -3,6 +3,8 @@ services:
     image: redis:7-alpine
     container_name: flowcv-redis
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -18,7 +20,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       API_HOST: 0.0.0.0
       API_PORT: 8000
-      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000"]}'
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://localhost:3100","http://127.0.0.1:3100"]}'
       IMPORT_MAX_FILE_SIZE_BYTES: ${IMPORT_MAX_FILE_SIZE_BYTES:-10485760}
       IMPORT_MAX_ARCHIVE_EXPANDED_BYTES: ${IMPORT_MAX_ARCHIVE_EXPANDED_BYTES:-52428800}
       PDF_RENDER_TIMEOUT_MS: ${PDF_RENDER_TIMEOUT_MS:-30000}
