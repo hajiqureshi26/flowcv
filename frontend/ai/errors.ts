@@ -24,6 +24,7 @@ const PROVIDER_CODES: Record<string, AIErrorKind> = {
   quota_exhausted: 'quota_exhausted',
   invalid_ai_response: 'invalid_response',
   ai_service_error: 'provider_unavailable',
+  infrastructure_unavailable: 'provider_unavailable',
 };
 
 const INPUT_CODES: Record<string, AIErrorKind> = {

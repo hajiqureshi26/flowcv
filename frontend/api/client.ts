@@ -7,6 +7,7 @@ import type {
   JDAnalysisResult,
   ResumeImproveInput,
   ResumeImproveResult,
+  ResumeHealthResult,
   TailoringResult,
 } from '@/frontend/ai/types';
 
@@ -22,6 +23,13 @@ export class ApiError extends Error {
   ) {
     super(message);
     this.name = 'ApiError';
+  }
+}
+
+export class RequestCancelledError extends Error {
+  constructor() {
+    super('Request was cancelled');
+    this.name = 'RequestCancelledError';
   }
 }
 
@@ -67,6 +75,7 @@ async function withResponse<T>(path: string, init: RequestInit | undefined, cons
     }
     return await consume(response);
   } catch (error) {
+    if (init?.signal?.aborted && !controller.signal.aborted) throw new RequestCancelledError();
     if (controller.signal.aborted) throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS} ms`);
     if (error instanceof TypeError) throw new Error('Network request failed');
     throw error;
@@ -91,10 +100,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 }
 
-async function upload(path: string, file: File): Promise<Resume> {
+async function upload(path: string, file: File, signal?: AbortSignal): Promise<Resume> {
   const formData = new FormData();
   formData.append('file', file);
-  return withResponse(path, { method: 'POST', body: formData }, async (response) => {
+  return withResponse(path, { method: 'POST', body: formData, signal }, async (response) => {
     try {
       return resumeSchema.parse(await response.json()) as Resume;
     } catch {
@@ -137,12 +146,13 @@ export const pdfApi = {
 
 export const importApi = {
   resumeJson: (payload: unknown) => requestResume('/api/imports/resume-json', { method: 'POST', body: JSON.stringify(payload) }),
-  pdf: (file: File) => upload('/api/imports/pdf', file),
-  docx: (file: File) => upload('/api/imports/docx', file),
+  pdf: (file: File, signal?: AbortSignal) => upload('/api/imports/pdf', file, signal),
+  docx: (file: File, signal?: AbortSignal) => upload('/api/imports/docx', file, signal),
 };
 
 export const aiApi = {
   improveResume: (input: ResumeImproveInput) => request<AIResponse<ResumeImproveResult>>('/api/ai/resume/improve', { method: 'POST', body: JSON.stringify(input) }),
+  analyzeResumeHealth: (resume: Resume) => request<AIResponse<ResumeHealthResult>>('/api/ai/resume/health', { method: 'POST', body: JSON.stringify({ resume }) }),
   analyzeJobDescription: (job_description: string) => request<AIResponse<JDAnalysisResult>>('/api/ai/jd/analyze', { method: 'POST', body: JSON.stringify({ job_description }) }),
   analyzeATS: (resume: Resume, job_description: string) => request<AIResponse<ATSAnalysisResult>>('/api/ai/ats/analyze', { method: 'POST', body: JSON.stringify({ resume, job_description }) }),
   tailorResume: (resume: Resume, job_description: string) => request<AIResponse<TailoringResult>>('/api/ai/tailor', { method: 'POST', body: JSON.stringify({ resume, job_description }) }),

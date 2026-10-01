@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
+import logging
+from threading import BoundedSemaphore
+from time import monotonic
 from typing import Annotated
 from zipfile import ZipFile, is_zipfile
 
@@ -12,6 +16,20 @@ from app.schemas.resume import Resume
 from app.services.import_service import import_service
 
 router = APIRouter(prefix='/imports', tags=['imports'])
+logger = logging.getLogger(__name__)
+_import_slots = BoundedSemaphore(get_settings().import_max_concurrent_jobs)
+
+
+async def _parse_import(data: bytes, extension: str) -> Resume:
+    if not _import_slots.acquire(blocking=False):
+        raise HTTPException(status_code=503, detail='Import capacity is busy. Please retry shortly.', headers={'Retry-After': '2'})
+    started = monotonic()
+    try:
+        parser = import_service.import_from_pdf if extension == 'pdf' else import_service.import_from_docx
+        return await asyncio.to_thread(parser, data)
+    finally:
+        _import_slots.release()
+        logger.info('resume_import_finished type=%s duration_ms=%d', extension, round((monotonic() - started) * 1000))
 
 
 @router.post('/resume-json')
@@ -57,7 +75,7 @@ async def _read_upload(file: UploadFile, expected_extension: str, accepted_types
 async def import_resume_pdf(file: Annotated[UploadFile, File(...)]) -> Resume:
     try:
         data = await _read_upload(file, 'pdf', {'application/pdf', 'application/x-pdf', 'application/octet-stream'})
-        return import_service.import_from_pdf(data)
+        return await _parse_import(data, 'pdf')
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -73,6 +91,6 @@ async def import_resume_docx(file: Annotated[UploadFile, File(...)]) -> Resume:
                 'application/octet-stream',
             },
         )
-        return import_service.import_from_docx(data)
+        return await _parse_import(data, 'docx')
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

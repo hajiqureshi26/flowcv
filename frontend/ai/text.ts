@@ -33,3 +33,19 @@ export function improvableSections(resume: Resume): SectionKey[] {
   return (['profile', 'experience', 'education', 'projects', 'skills', 'certifications', 'achievements', 'links', 'custom'] as SectionKey[])
     .filter((section) => sectionPlainText(resume, section).length > 0);
 }
+
+/** Build the smallest valid Resume envelope accepted by the existing improve API. */
+export function resumeContextForSection(resume: Resume, section: SectionKey): Resume {
+  const context = structuredClone(resume);
+  context.id = 'copilot-context';
+  context.updatedAt = '';
+  context.personal = { name: '', title: '', email: '', phone: '', location: '', linkedin: '', github: '', website: '' };
+  context.profile = { type: 'doc', content: [] };
+  for (const key of ['experience', 'education', 'projects', 'skills', 'certifications', 'achievements', 'links', 'custom'] as const) {
+    if (key !== section) context[key] = [];
+  }
+  if (section === 'profile') context.profile = structuredClone(resume.profile);
+  context.sectionsOrder = [section];
+  context.hiddenSections = [];
+  return context;
+}

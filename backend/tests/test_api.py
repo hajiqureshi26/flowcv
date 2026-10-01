@@ -91,6 +91,24 @@ def test_health_endpoint() -> None:
     assert response.json() == {'status': 'ok'}
 
 
+def test_redis_health_endpoint_reports_available_and_unavailable_states(monkeypatch) -> None:
+    class HealthyRedis:
+        async def ping(self):
+            return True
+
+    class OfflineRedis:
+        async def ping(self):
+            raise ConnectionError('private redis host')
+
+    monkeypatch.setattr('app.main.get_redis', lambda: HealthyRedis())
+    healthy = client.get('/health/redis')
+    assert healthy.status_code == 200 and healthy.json() == {'status': 'ok', 'redis': 'ok'}
+    monkeypatch.setattr('app.main.get_redis', lambda: OfflineRedis())
+    offline = client.get('/health/redis')
+    assert offline.status_code == 503
+    assert offline.json()['error']['message'] == 'Redis is unavailable'
+
+
 def test_runtime_settings_accept_stage_two_environment_names() -> None:
     from app.config.settings import Settings
 
@@ -130,6 +148,15 @@ def test_runtime_settings_accept_stage_two_environment_names() -> None:
     assert settings.ai_identity_secret == 'test-secret'
     assert settings.trusted_proxy_count == 1
     assert settings.trusted_proxy_hosts == ['10.0.0.1']
+
+
+def test_production_settings_reject_development_identity_secret() -> None:
+    from app.config.settings import Settings
+
+    with pytest.raises(ValueError, match='AI_IDENTITY_SECRET'):
+        Settings(_env_file=None, APP_ENV='production')
+    settings = Settings(_env_file=None, APP_ENV='production', AI_IDENTITY_SECRET='a' * 40)
+    assert settings.ai_identity_secret == 'a' * 40
 
 
 def test_structured_api_errors_hide_internal_details(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,7 +293,7 @@ def test_pdf_generation_endpoint() -> None:
     imported_resume = import_response.json()
     assert imported_resume['personal']['name'] == 'Jordan Lee'
     assert imported_resume['personal']['email'] == 'jordan@example.com'
-    assert 'Improved platform reliability' in imported_resume['custom'][0]['content']
+    assert 'Improved platform reliability' in imported_resume['experience'][0]['description']
 
 
 def test_docx_import_endpoint_normalizes_extracted_content() -> None:
@@ -289,8 +316,38 @@ def test_docx_import_endpoint_normalizes_extracted_content() -> None:
     imported_resume = response.json()
     assert imported_resume['personal']['name'] == 'Avery Chen'
     assert imported_resume['personal']['email'] == 'avery@example.com'
-    assert 'Product engineer with platform experience.' in imported_resume['profile']['content'][0]['content'][0]['text']
+    assert imported_resume['profile']['content'] == []
+    assert 'Product engineer with platform experience.' in imported_resume['custom'][0]['content']
     assert 'Accessibility & <design>' in imported_resume['custom'][0]['content']
+
+
+def test_import_structures_explicit_headings_and_preserves_unclassified_text() -> None:
+    document = DocxDocument()
+    document.add_paragraph('Mira Patel')
+    document.add_paragraph('mira@example.com')
+    document.add_paragraph('An original note that has no section heading.')
+    document.add_paragraph('Professional Summary')
+    document.add_paragraph('Design leader focused on accessible products.')
+    document.add_paragraph('Experience:')
+    document.add_paragraph('Product lead at Crescent Studio, 2021–2024')
+    document.add_paragraph('Led research and shipped a redesigned checkout.')
+    document.add_paragraph('Skills')
+    document.add_paragraph('Research | Prototyping | Accessibility')
+    buffer = io.BytesIO()
+    document.save(buffer)
+
+    response = client.post(
+        '/api/imports/docx',
+        files={'file': ('mira.docx', buffer.getvalue(), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')},
+    )
+    assert response.status_code == 200
+    imported = response.json()
+    assert imported['personal']['name'] == 'Mira Patel'
+    assert 'Design leader focused on accessible products.' in imported['profile']['content'][0]['content'][0]['text']
+    assert imported['experience'][0]['title'] is None
+    assert 'Product lead at Crescent Studio, 2021–2024' in imported['experience'][0]['description']
+    assert imported['skills'][0]['items'] == ['Research', 'Prototyping', 'Accessibility']
+    assert 'An original note that has no section heading.' in imported['custom'][0]['content']
 
 
 def test_import_rejects_unsupported_malformed_empty_and_oversized_uploads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -446,7 +503,7 @@ def test_pdf_service_generates_expected_page_counts() -> None:
 
     imported = client.post('/api/imports/pdf', files={'file': ('long.pdf', long_pdf, 'application/pdf')})
     assert imported.status_code == 200
-    assert 'Project 11' in imported.json()['custom'][0]['content']
+    assert any('Project 11' in str(entry.get('name') or entry.get('description') or entry.get('title') or '') for entry in imported.json()['projects'])
 
 
 def test_pdf_renders_a_two_page_long_profile() -> None:

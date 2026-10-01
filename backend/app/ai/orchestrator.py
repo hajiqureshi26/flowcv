@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from threading import BoundedSemaphore
+from time import monotonic
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
+from redis.exceptions import RedisError
 
-from app.ai.agents import ATSAgent, JDAnalyzerAgent, ResumeAgent, TailoringAgent
+from app.ai.agents import ATSAgent, JDAnalyzerAgent, ResumeAgent, ResumeHealthAgent, TailoringAgent
 from app.ai.agents.base import Agent, AgentTask
 from app.ai.providers.base import AIProviderError, ProviderOutput
 from app.ai.providers.gemini import GeminiProvider
@@ -21,14 +25,19 @@ from app.ai.schemas import (
     ProviderMetadata,
     ResumeImproveRequest,
     ResumeImproveResult,
+    ResumeHealthRequest,
+    ResumeHealthResult,
     TailoringRequest,
     TailoringResult,
 )
-from app.config.settings import Settings
+from app.config.settings import Settings, get_settings
 from app.redis.cache import RedisCache
 from app.redis.provider_health import ProviderHealthStore
 from app.redis.rate_limit import RateLimitExceeded, RateWindow, RedisRateLimiter
 from app.schemas.resume import Resume
+
+logger = logging.getLogger(__name__)
+_provider_slots = BoundedSemaphore(get_settings().ai_max_concurrent_provider_requests)
 
 
 class AIServiceError(Exception):
@@ -42,6 +51,7 @@ class AIServiceError(Exception):
 
 class AIOrchestrator:
     STRUCTURAL_KEYS = frozenset({'type', 'attrs', 'marks', 'id'})
+    CACHE_CONTRACT_VERSION = 'stage4-v2'
 
     def __init__(self, redis, settings: Settings, provider_manager: ProviderManager | None = None) -> None:
         self._settings = settings
@@ -64,6 +74,7 @@ class AIOrchestrator:
         )
         self._agents: dict[str, Agent] = {
             'resume_improve': ResumeAgent(),
+            'resume_health': ResumeHealthAgent(),
             'jd_analyze': JDAnalyzerAgent(),
             'ats_analyze': ATSAgent(),
             'tailor': TailoringAgent(),
@@ -71,6 +82,9 @@ class AIOrchestrator:
 
     async def improve_resume(self, request: ResumeImproveRequest, actor: str) -> AIResponse[ResumeImproveResult]:
         return await self._execute('resume_improve', request, actor, ResumeImproveResult)
+
+    async def analyze_resume_health(self, request: ResumeHealthRequest, actor: str) -> AIResponse[ResumeHealthResult]:
+        return await self._execute('resume_health', request, actor, ResumeHealthResult)
 
     async def analyze_jd(self, request: JDAnalysisRequest, actor: str) -> AIResponse[JDAnalysisResult]:
         return await self._execute('jd_analyze', request, actor, JDAnalysisResult)
@@ -93,17 +107,29 @@ class AIOrchestrator:
                     'AI request limit reached. Try again after the indicated delay.',
                     retry_after=exc.retry_after_seconds,
                 ) from exc
+            except RedisError as exc:
+                raise self._redis_error() from exc
 
         agent = self._agents[operation]
         task = agent.build_task(request)
         cache_key = self._cache_key(actor, operation, request)
         if self._settings.ai_cache_enabled and task.cacheable:
-            cached = await self._cache.get(cache_key)
+            try:
+                cached = await self._cache.get(cache_key)
+            except RedisError as exc:
+                raise self._redis_error() from exc
             if cached is not None:
                 return self._cached_response(cached, result_type)
 
+        if not _provider_slots.acquire(blocking=False):
+            raise AIServiceError('ai_overloaded', 503, 'AI capacity is busy. Please retry shortly.', retry_after=2)
+        provider_started = monotonic()
         try:
-            provider_output = await self._providers.generate(task)
+            try:
+                provider_output = await self._providers.generate(task)
+            finally:
+                _provider_slots.release()
+                logger.info('ai_provider_request_finished operation=%s duration_ms=%d', operation, round((monotonic() - provider_started) * 1000))
             result = result_type.model_validate(provider_output.data.model_dump(mode='json'))
             self._validate_result(operation, request, result)
         except ValidationError as exc:
@@ -111,6 +137,8 @@ class AIOrchestrator:
         except AIProviderError as exc:
             code, status, message = self._provider_error(exc)
             raise AIServiceError(code, status, message) from exc
+        except RedisError as exc:
+            raise self._redis_error() from exc
 
         output_bytes = self._json_size(result)
         if output_bytes > self._settings.ai_max_output_chars:
@@ -118,8 +146,15 @@ class AIOrchestrator:
 
         response = self._response(result, provider_output, cached=False)
         if self._settings.ai_cache_enabled and task.cacheable:
-            await self._cache.set(cache_key, response.model_dump(mode='json'))
+            try:
+                await self._cache.set(cache_key, response.model_dump(mode='json'))
+            except RedisError as exc:
+                raise self._redis_error() from exc
         return response
+
+    @staticmethod
+    def _redis_error() -> AIServiceError:
+        return AIServiceError('infrastructure_unavailable', 503, 'Temporary AI infrastructure is unavailable. Please try again shortly.')
 
     def _validate_input(self, request: BaseModel) -> None:
         if self._json_size(request) > self._settings.ai_max_request_bytes:
@@ -151,12 +186,65 @@ class AIOrchestrator:
             resume_text = self._normalize(self._resume_text(request.resume))
             job_description = self._normalize(request.job_description)
             for suggestion in result.suggestions:
-                if self._normalize(suggestion.original_content) not in resume_text:
+                original = self._normalize(suggestion.original_content)
+                source_text = self._normalize(self._tailorable_content(request.resume, suggestion.section, suggestion.entry_id))
+                if original not in resume_text or original not in source_text:
                     raise AIServiceError('invalid_ai_response', 502, 'A tailoring suggestion does not match supplied resume content')
                 if self._normalize(suggestion.supporting_requirement) not in job_description:
                     raise AIServiceError('invalid_ai_response', 502, 'A tailoring suggestion lacks a matching job requirement')
-                if suggestion.entry_id and not self._entry_exists(request.resume, suggestion.section, suggestion.entry_id):
-                    raise AIServiceError('invalid_ai_response', 502, 'A tailoring suggestion references an unknown resume entry')
+                suggested = self._normalize(suggestion.suggested_content)
+                original_numbers = set(re.findall(r'\b\d+(?:[.,]\d+)?%?\b', original))
+                introduced_numbers = set(re.findall(r'\b\d+(?:[.,]\d+)?%?\b', suggested)) - original_numbers
+                if introduced_numbers:
+                    raise AIServiceError('invalid_ai_response', 502, 'A tailoring suggestion introduced an unsupported number or metric')
+                term_pattern = r'[a-z0-9+#-]+(?:\.[a-z0-9+#-]+)*'
+                requirement_terms = set(re.findall(term_pattern, self._normalize(suggestion.supporting_requirement)))
+                suggestion_terms = set(re.findall(term_pattern, suggested))
+                resume_terms = set(re.findall(term_pattern, resume_text))
+                unsupported_requirement_terms = (requirement_terms & suggestion_terms) - resume_terms
+                if unsupported_requirement_terms:
+                    raise AIServiceError('invalid_ai_response', 502, 'A tailoring suggestion introduced an unsupported job requirement')
+        if isinstance(result, ATSAnalysisResult) and isinstance(request, ATSAnalysisRequest):
+            self._reconcile_ats_evidence(request.resume, result)
+
+    @classmethod
+    def _reconcile_ats_evidence(cls, resume: Resume, result: ATSAnalysisResult) -> None:
+        skill_text = cls._normalize(cls._flatten(resume.skills))
+        evidence_text = cls._normalize(cls._flatten([resume.experience, resume.projects]))
+        all_text = cls._normalize(cls._resume_text(resume))
+        weak: list[str] = list(result.weak_evidence)
+        matched: list[str] = []
+        missing: list[str] = []
+        for item in dict.fromkeys([*result.matching_skills, *result.missing_relevant_keywords]):
+            term = cls._normalize(item)
+            listed_as_skill = bool(term and term in skill_text)
+            evidenced = bool(term and term in evidence_text)
+            present_anywhere = bool(term and term in all_text)
+            if listed_as_skill and not evidenced:
+                weak.append(f'{item} is listed as a skill, but supporting experience or project evidence was not detected.')
+            elif evidenced:
+                matched.append(item)
+            elif present_anywhere:
+                weak.append(f'{item} appears in the resume, but concrete experience evidence was not detected.')
+            elif item in result.missing_relevant_keywords:
+                missing.append(item)
+        result.matching_skills = list(dict.fromkeys(matched))
+        result.weak_evidence = list(dict.fromkeys(weak))
+        result.missing_relevant_keywords = list(dict.fromkeys(missing))
+
+    @classmethod
+    def _tailorable_content(cls, resume: Resume, section: str, entry_id: str | None) -> str:
+        if section == 'profile':
+            return cls._flatten(resume.profile) if entry_id is None else ''
+        if section not in {'experience', 'projects', 'achievements', 'custom'} or not entry_id:
+            return ''
+        entry = next((item for item in getattr(resume, section) if item.id == entry_id), None)
+        if entry is None:
+            return ''
+        # Tailoring changes descriptive copy only. Employer, role, date,
+        # qualification, and other identity fields are not editable proposals.
+        editable = {key: getattr(entry, key, None) for key in ('description', 'bullets', 'content')}
+        return cls._flatten(editable)
 
     def _rate_windows(self, operation: str) -> list[RateWindow]:
         windows = [
@@ -178,7 +266,8 @@ class AIOrchestrator:
             'request': request.model_dump(mode='json'),
             'models': [self._settings.gemini_model, self._settings.openrouter_model],
         }
-        return self._cache.key_for(actor, operation, input_data, self._settings.ai_prompt_version)
+        prompt_version = f'{self._settings.ai_prompt_version}:{self.CACHE_CONTRACT_VERSION}'
+        return self._cache.key_for(actor, operation, input_data, prompt_version)
 
     def _cached_response(self, value: Any, result_type: type[BaseModel]):
         try:

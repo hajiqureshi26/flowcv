@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { importApi, pdfApi, resumeApi, templateApi } from '../frontend/api/client';
+import { importApi, pdfApi, RequestCancelledError, resumeApi, templateApi } from '../frontend/api/client';
 import { defaultResume } from '../resume/defaults';
 
 const jsonResponse = (body: unknown, status = 200) => ({
@@ -89,6 +89,17 @@ describe('frontend API client', () => {
     expect(init.headers).toBeUndefined();
     expect(init.body).toBeInstanceOf(FormData);
     expect((init.body as FormData).get('file')).toBe(file);
+  });
+
+  it('propagates import cancellation through the upload request', async () => {
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    const pending = importApi.pdf(new File(['resume'], 'resume.pdf'), controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toBeInstanceOf(RequestCancelledError);
   });
 
   it('parses structured API errors', async () => {

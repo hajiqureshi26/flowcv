@@ -1,7 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-test('builder opens and template browser is reachable', async ({ page }) => {
+test('landing, editor, and template detail flow are reachable', async ({ page }) => {
   await page.goto('/');
+  await expect(page.getByRole('heading', { name: /Your next chapter starts with a clear story/ })).toBeVisible();
+  await page.getByRole('link', { name: /Create your resume/ }).first().click();
+  await expect(page.getByRole('heading', { name: 'How would you like to start?' })).toBeVisible();
+  await page.goto('/editor');
   await expect(page.getByRole('heading', { name: 'Build your resume' })).toBeVisible();
   await page.getByRole('button', { name: 'Edit personal details' }).click();
   await expect(page.getByLabel('Email')).toBeVisible();
@@ -13,15 +17,65 @@ test('builder opens and template browser is reachable', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Clean ATS' })).toBeVisible();
   await page.getByRole('button', { name: 'Modern', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Modern two column' })).toBeVisible();
-  await page.getByRole('button', { name: 'Preview Modern two column' }).first().click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.locator('.live-template-preview .resume-header')).toContainText('Alex Morgan');
-  await page.getByRole('button',{name:'Use this template'}).last().click();
+  await page.getByRole('link', { name: /Modern two column/ }).click();
+  await expect(page.getByRole('heading', { name: 'Modern two column' })).toBeVisible();
+  await expect(page.locator('.detail-preview .resume-header')).toContainText('Alex Morgan');
+  await page.getByRole('button',{name:/Use this template/}).click();
+  await expect(page).toHaveURL(/\/editor\?resumeId=/);
   await expect(page.locator('.page-frame .paper').first()).toHaveClass(/template-modern/);
 });
 
-test('sections can be removed from the layout and restored without losing their content', async ({ page }) => {
+test('mobile journey menu exposes working navigation', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
+  const menu = page.getByRole('button', { name: 'Open navigation menu' });
+  await menu.click();
+  await expect(page.getByRole('button', { name: 'Close navigation menu' })).toHaveAttribute('aria-expanded', 'true');
+  await page.locator('.journey-header nav').getByRole('link', { name: 'Templates', exact: true }).click();
+  await expect(page).toHaveURL(/\/templates$/);
+  await expect(page.getByRole('heading', { name: 'Find your format.' })).toBeVisible();
+});
+
+test('template detail supports previous and next navigation', async ({ page }) => {
+  await page.goto('/templates/modern');
+  await expect(page.getByRole('heading', { name: 'Modern two column' })).toBeVisible();
+  await page.getByRole('link', { name: 'Next →' }).click();
+  await expect(page).toHaveURL(/\/templates\/ats$/);
+  await expect(page.getByRole('heading', { name: 'Clean ATS' })).toBeVisible();
+  await page.goto('/templates/not-a-template');
+  await expect(page.getByRole('heading', { name: /We couldn.t find that design/ })).toBeVisible();
+});
+
+test('local version history restores a snapshot and preserves the previous version', async ({ page }) => {
+  await page.goto('/editor');
+  await page.getByRole('button', { name: 'History' }).click();
+  await expect(page.getByRole('dialog', { name: 'Version history' })).toBeVisible();
+  await page.getByRole('button', { name: 'Save a recovery snapshot' }).click();
+  await expect(page.locator('.history-message')).toContainText('Recovery snapshot saved');
+  await page.getByRole('button', { name: 'Close version history' }).click();
+  await page.getByRole('button', { name: 'Edit personal details' }).click();
+  await page.getByLabel('Full name').fill('Temporary Edit');
+  await page.waitForTimeout(700);
+  await page.getByRole('button', { name: 'History' }).click();
+  await page.getByRole('button', { name: 'Restore' }).first().click();
+  await expect(page.locator('.page-frame .paper').first()).toContainText('Alex Morgan');
+  await expect(page.locator('.page-frame .paper').first()).not.toContainText('Temporary Edit');
+  await expect(page.locator('.history-message')).toContainText('A snapshot of the previous version was kept');
+});
+
+test('editor and template surfaces do not cause page-level horizontal overflow', async ({ page }) => {
+  for (const width of [320, 390, 768, 1024, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const route of ['/', '/start', '/import', '/editor', '/templates', '/templates/modern']) {
+      await page.goto(route);
+      const widths = await page.evaluate(() => ({ viewport: window.innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth }));
+      expect(widths.document, `${route} at ${width}px; body ${widths.body}px`).toBeLessThanOrEqual(widths.viewport);
+    }
+  }
+});
+
+test('sections can be removed from the layout and restored without losing their content', async ({ page }) => {
+  await page.goto('/editor');
   await page.getByRole('button', { name: 'Remove Education from resume' }).click();
   await expect(page.locator('.section-card').filter({ hasText: 'Education' })).toHaveCount(0);
   await page.getByLabel('Choose a section to add').selectOption('education');
@@ -34,14 +88,14 @@ test('sections can be removed from the layout and restored without losing their 
 
 test('mobile editor can switch to the readable A4 preview',async({page})=>{
   await page.setViewportSize({width:390,height:844});
-  await page.goto('/');
-  await page.getByRole('button',{name:'Preview',exact:true}).click();
+  await page.goto('/editor');
+  await page.getByRole('tab',{name:'Preview',exact:true}).click();
   await expect(page.locator('.page-frame .paper').first()).toBeVisible();
   await expect(page.getByRole('button',{name:'Zoom in'})).toBeVisible();
 });
 
 test('rich text toolbar supports underline formatting', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/editor');
   await page.getByRole('button', { name: 'Edit personal details' }).click();
   const toolbar = page.locator('.format-bar').first();
   const editor = page.locator('.tiptap').first();
@@ -53,7 +107,7 @@ test('rich text toolbar supports underline formatting', async ({ page }) => {
 });
 
 test('personal details autosave and restore from IndexedDB',async({page})=>{
-  await page.goto('/');
+  await page.goto('/editor');
   await page.getByRole('button',{name:'Edit personal details'}).click();
   await page.getByLabel('Email').fill('candidate@example.org');
   await page.waitForTimeout(900);
@@ -64,7 +118,7 @@ test('personal details autosave and restore from IndexedDB',async({page})=>{
 });
 
 test('long resumes paginate into three or more A4 sheets',async({page})=>{
-  await page.goto('/');
+  await page.goto('/editor');
   await expect(page.locator('.page-frame').first()).toBeVisible();
   await page.waitForTimeout(900);
   await page.evaluate(async()=>{

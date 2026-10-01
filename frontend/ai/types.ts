@@ -26,12 +26,17 @@ export type JDAnalysisResult = {
   responsibilities: string[];
   experience_requirements: string[];
   education_requirements: string[];
+  certification_requirements: string[];
   keywords: string[];
   ats_keywords: string[];
+  domain_signals: string[];
 };
 
 export type ATSAnalysisResult = {
+  matched_requirements: string[];
+  missing_requirements: string[];
   matching_skills: string[];
+  weak_evidence: string[];
   missing_relevant_keywords: string[];
   content_issues: string[];
   formatting_concerns: string[];
@@ -58,3 +63,15 @@ export type ResumeImproveInput = {
   content: string;
   operation?: 'improve' | 'grammar' | 'clarity' | 'conciseness' | 'professional_wording';
 };
+
+export type ResumeHealthFinding = {
+  id: string;
+  category: 'content' | 'consistency' | 'readability' | 'relevance' | 'formatting' | 'structure';
+  severity: 'critical' | 'warning' | 'suggestion' | 'good';
+  location: string;
+  title: string;
+  explanation: string;
+  recommendation: string;
+};
+
+export type ResumeHealthResult = { findings: ResumeHealthFinding[] };

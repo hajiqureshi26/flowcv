@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from threading import BoundedSemaphore
+from time import monotonic
 from html import escape
 from typing import Any
 from urllib.parse import urlsplit
@@ -12,6 +15,8 @@ from app.config.settings import get_settings
 from app.schemas.resume import Resume
 from app.services.resume_service import resume_service
 from app.services.template_service import template_service
+
+logger = logging.getLogger(__name__)
 
 
 class TemplateRenderer:
@@ -35,6 +40,9 @@ template_renderer = TemplateRenderer()
 
 
 class PDFService:
+    def __init__(self) -> None:
+        self._render_slots = BoundedSemaphore(get_settings().pdf_max_concurrent_renders)
+
     @staticmethod
     def _normalize_resume_payload(payload: Resume | dict[str, Any]) -> Resume:
         if isinstance(payload, Resume):
@@ -55,18 +63,33 @@ class PDFService:
         if template_service.get_template(selected_template) is None:
             raise HTTPException(status_code=400, detail=f'Unsupported PDF template: {selected_template}')
         html = self._build_resume_html(normalized_resume, selected_template)
+        settings = get_settings()
+        if not self._render_slots.acquire(timeout=settings.pdf_render_queue_timeout_seconds):
+            raise HTTPException(status_code=503, detail='PDF rendering is busy. Please retry shortly.', headers={'Retry-After': '2'})
+        started = monotonic()
+        success = False
+        try:
+            pdf_bytes = self._render_html_to_pdf(html, settings.pdf_render_timeout_ms)
+            success = True
+            return pdf_bytes
+        finally:
+            self._render_slots.release()
+            logger.info('pdf_render_finished duration_ms=%d success=%s', round((monotonic() - started) * 1000), success)
+
+    @property
+    def max_concurrent_renders(self) -> int:
+        return get_settings().pdf_max_concurrent_renders
+
+    @staticmethod
+    def _render_html_to_pdf(html: str, timeout_ms: int) -> bytes:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
                 page = browser.new_page(viewport={'width': 1200, 'height': 1600}, device_scale_factor=1)
-                page.set_content(html, wait_until='load', timeout=get_settings().pdf_render_timeout_ms)
-                pdf_bytes = page.pdf(
-                    print_background=True,
-                    prefer_css_page_size=True,
-                )
+                page.set_content(html, wait_until='load', timeout=timeout_ms)
+                return page.pdf(print_background=True, prefer_css_page_size=True)
             finally:
                 browser.close()
-        return pdf_bytes
 
     def _build_resume_html(self, resume: Resume, template: str) -> str:
         template_style = template_renderer.style_for(template)

@@ -8,7 +8,7 @@ from starlette.requests import Request
 from app.ai.orchestrator import AIOrchestrator
 from app.ai.providers.base import ProviderOutput
 from app.ai.router import get_ai_orchestrator
-from app.ai.schemas import JDAnalysisResult
+from app.ai.schemas import JDAnalysisResult, ResumeHealthFinding, ResumeHealthResult
 from app.ai.security import actor_fingerprint
 from app.config.settings import Settings
 from app.main import app
@@ -18,6 +18,16 @@ from test_redis import FakeRedis
 class FakeManager:
     async def generate(self, _task) -> ProviderOutput:
         return ProviderOutput(JDAnalysisResult(job_title='Product Engineer', required_skills=['Python']), 'gemini', 'mock-model', False)
+
+
+class FakeHealthManager:
+    async def generate(self, _task) -> ProviderOutput:
+        result = ResumeHealthResult(findings=[ResumeHealthFinding(
+            id='clarity-1', category='readability', severity='suggestion', location='Profile',
+            title='Profile could be shorter', explanation='The profile has several long sentences.',
+            recommendation='Consider tightening the introduction.',
+        )])
+        return ProviderOutput(result, 'gemini', 'mock-model', False)
 
 
 def test_jd_endpoint_uses_orchestrator_and_returns_structured_result() -> None:
@@ -31,6 +41,21 @@ def test_jd_endpoint_uses_orchestrator_and_returns_structured_result() -> None:
     assert response.status_code == 200
     assert response.json()['result']['job_title'] == 'Product Engineer'
     assert response.json()['provider'] == {'name': 'gemini', 'model': 'mock-model', 'fallback_used': False, 'cached': False}
+
+
+def test_resume_health_endpoint_returns_semantic_findings_without_mutating_resume() -> None:
+    service = AIOrchestrator(FakeRedis(), Settings(_env_file=None), FakeHealthManager())
+    app.dependency_overrides[get_ai_orchestrator] = lambda: service
+    try:
+        response = TestClient(app).post('/api/ai/resume/health', json={'resume': {
+            'id': 'health-resume', 'updatedAt': '2026-09-27T00:00:00Z',
+            'personal': {'name': 'Taylor Morgan'},
+            'profile': {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': 'Product engineer'}]}]},
+        }})
+    finally:
+        app.dependency_overrides.pop(get_ai_orchestrator, None)
+    assert response.status_code == 200
+    assert response.json()['result']['findings'][0]['category'] == 'readability'
 
 
 def test_ai_endpoint_returns_429_with_retry_after_and_structured_validation_error() -> None:

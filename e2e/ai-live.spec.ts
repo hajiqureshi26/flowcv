@@ -14,7 +14,7 @@ import { test, expect } from '@playwright/test';
 test.skip(process.env.LIVE_BACKEND !== '1', 'Requires docker compose up (FastAPI + Redis) with this origin allowed by CORS.');
 
 test('the browser reports a structured provider outage and then a Redis-backed rate limit', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/editor');
   await page.getByRole('button', { name: 'AI studio' }).click();
   await expect(page.getByLabel('Text sent for review')).not.toHaveValue('');
 

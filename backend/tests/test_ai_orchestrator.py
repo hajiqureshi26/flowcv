@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.ai.orchestrator import AIOrchestrator, AIServiceError
 from app.ai.providers.base import ProviderOutput
@@ -17,7 +18,7 @@ from app.ai.schemas import (
     TailoringSuggestion,
 )
 from app.config.settings import Settings
-from app.schemas.resume import Resume
+from app.schemas.resume import Entry, Resume
 from test_redis import FakeRedis
 
 
@@ -102,18 +103,18 @@ def test_tailoring_response_must_reference_resume_and_job_description() -> None:
             section='experience',
             entry_id='exp-1',
             original_content='Led platform work.',
-            suggested_content='Led platform work for reliable delivery.',
+            suggested_content='Led platform work reliably.',
             reason='Clarifies the supplied responsibility.',
-            supporting_requirement='reliable delivery',
+            supporting_requirement='platform work',
         )])
         service = AIOrchestrator(FakeRedis(), Settings(_env_file=None), FakeManager(valid))
-        result = await service.tailor_resume(TailoringRequest(resume=sample_resume(), job_description='We value reliable delivery.'), 'actor')
+        result = await service.tailor_resume(TailoringRequest(resume=sample_resume(), job_description='We value platform work and reliable delivery.'), 'actor')
         assert result.result.suggestions[0].entry_id == 'exp-1'
 
         unsupported = valid.model_copy(update={'suggestions': [valid.suggestions[0].model_copy(update={'supporting_requirement': 'invented requirement'})]})
         bad_service = AIOrchestrator(FakeRedis(), Settings(_env_file=None), FakeManager(unsupported))
         with pytest.raises(AIServiceError) as error:
-            await bad_service.tailor_resume(TailoringRequest(resume=sample_resume(), job_description='We value reliable delivery.'), 'actor')
+            await bad_service.tailor_resume(TailoringRequest(resume=sample_resume(), job_description='We value platform work and reliable delivery.'), 'actor')
         assert error.value.code == 'invalid_ai_response'
 
     asyncio.run(check())
@@ -153,6 +154,77 @@ def test_ats_operation_uses_structured_result_schema() -> None:
             __import__('app.ai.schemas', fromlist=['ATSAnalysisRequest']).ATSAnalysisRequest(resume=sample_resume(), job_description='Python required.'),
             'actor',
         )
-        assert response.result.matching_skills == ['Python']
+        assert response.result.matching_skills == []
+
+    asyncio.run(check())
+
+
+def test_ats_moves_listed_but_unevidenced_skill_to_weak_evidence() -> None:
+    async def check() -> None:
+        resume = sample_resume()
+        resume.skills = [Entry(id='skill-1', name='Docker')]
+        result = ATSAnalysisResult(matching_skills=['Docker'], missing_relevant_keywords=['Docker', 'Kubernetes'])
+        service = AIOrchestrator(FakeRedis(), Settings(_env_file=None), FakeManager(result))
+        response = await service.analyze_ats(
+            __import__('app.ai.schemas', fromlist=['ATSAnalysisRequest']).ATSAnalysisRequest(
+                resume=resume, job_description='Docker and Kubernetes experience requested.'
+            ), 'actor'
+        )
+        assert response.result.matching_skills == []
+        assert response.result.missing_relevant_keywords == ['Kubernetes']
+        assert any('Docker is listed as a skill' in item for item in response.result.weak_evidence)
+
+    asyncio.run(check())
+
+
+def test_redis_cache_outage_returns_structured_temporary_service_error() -> None:
+    class BrokenRedis:
+        async def get(self, _key):
+            raise RedisConnectionError('private redis address')
+
+    async def check() -> None:
+        service = AIOrchestrator(BrokenRedis(), Settings(_env_file=None, AI_RATE_LIMIT_ENABLED=False), FakeManager(JDAnalysisResult(job_title='Engineer')))
+        with pytest.raises(AIServiceError) as error:
+            await service.analyze_jd(JDAnalysisRequest(job_description='Engineer role'), 'actor')
+        assert error.value.status_code == 503
+        assert error.value.code == 'infrastructure_unavailable'
+        assert 'private redis address' not in error.value.message
+
+    asyncio.run(check())
+
+
+def test_tailoring_cannot_claim_text_from_another_section_or_entry() -> None:
+    async def check() -> None:
+        suggestion = TailoringSuggestion(
+            id='wrong-location', section='education', entry_id=None,
+            original_content='Led platform work.', suggested_content='Led supported platform delivery.',
+            reason='Clarifies work.', supporting_requirement='platform delivery',
+        )
+        service = AIOrchestrator(FakeRedis(), Settings(_env_file=None), FakeManager(TailoringResult(suggestions=[suggestion])))
+        with pytest.raises(AIServiceError) as error:
+            await service.tailor_resume(TailoringRequest(resume=sample_resume(), job_description='platform delivery'), 'actor')
+        assert error.value.code == 'invalid_ai_response'
+
+    asyncio.run(check())
+
+
+def test_tailoring_rejects_new_metrics_and_identity_field_edits() -> None:
+    async def check() -> None:
+        resume = sample_resume()
+        metric = TailoringSuggestion(
+            id='metric', section='experience', entry_id='exp-1', original_content='Led platform work.',
+            suggested_content='Led platform work and grew revenue by 40%.', reason='Adds impact.', supporting_requirement='platform work',
+        )
+        service = AIOrchestrator(FakeRedis(), Settings(_env_file=None), FakeManager(TailoringResult(suggestions=[metric])))
+        with pytest.raises(AIServiceError, match='unsupported number'):
+            await service.tailor_resume(TailoringRequest(resume=resume, job_description='platform work'), 'actor')
+
+        title_edit = metric.model_copy(update={
+            'id': 'title', 'original_content': 'Engineer', 'suggested_content': 'Senior Director',
+            'reason': 'Matches the posting.', 'supporting_requirement': 'Senior Director',
+        })
+        title_service = AIOrchestrator(FakeRedis(), Settings(_env_file=None), FakeManager(TailoringResult(suggestions=[title_edit])))
+        with pytest.raises(AIServiceError, match='does not match supplied resume content'):
+            await title_service.tailor_resume(TailoringRequest(resume=resume, job_description='Senior Director'), 'actor')
 
     asyncio.run(check())

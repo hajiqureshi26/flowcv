@@ -207,7 +207,7 @@ describe('AI studio', () => {
     renderPanel();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Job description' }));
-    fireEvent.change(screen.getByLabelText('Job description'), { target: { value: 'Senior product designer role.' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Job description' }), { target: { value: 'Senior product designer role.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Analyze job description' }));
     expect(await screen.findByTestId('jd-report')).toHaveTextContent('Senior Product Designer');
     expect(screen.getByText('Design systems')).toBeInTheDocument();
@@ -216,5 +216,75 @@ describe('AI studio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run ATS analysis' }));
     expect(await screen.findByTestId('ats-report')).toHaveTextContent('accessibility audits');
     expect(screen.getByText(/not a guarantee of any ATS result/i)).toBeInTheDocument();
+  });
+
+  it('shows deterministic and explicitly requested AI health findings without editing the resume', async () => {
+    const resume = structuredClone(defaultResume);
+    resume.personal.email = '';
+    useResumeStore.getState().restore(resume);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(envelope({ findings: [{ id: 'clarity', category: 'readability', severity: 'suggestion', location: 'Profile', title: 'Tighten the opening', explanation: 'The opening uses a long sentence.', recommendation: 'Review it for concision.' }] }))));
+    renderPanel();
+    fireEvent.click(screen.getByRole('tab', { name: 'Resume health' }));
+    expect(screen.getByTestId('resume-health-report')).toHaveTextContent('Email is missing');
+    expect(screen.getByTestId('resume-health-report')).not.toHaveTextContent('hiring score');
+    fireEvent.click(screen.getByRole('button', { name: 'Add AI wording review' }));
+    expect(await screen.findByText('Tighten the opening')).toBeInTheDocument();
+    expect(useResumeStore.getState().resume.personal.email).toBe('');
+  });
+
+  it('marks a generated suggestion stale when the resume changes before acceptance', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(envelope({ original: PROFILE_TEXT, suggested: 'A changed profile.', rationale: 'Clearer.' }))));
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Review suggestion' }));
+    await screen.findByTestId('assistant-suggestion');
+    useResumeStore.getState().update(resume => ({ ...resume, personal: { ...resume.personal, phone: '555-0100' } }));
+    expect(await screen.findByText(/outdated because your resume changed/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Accept suggestion' })).toBeDisabled();
+    expect(sectionPlainText(useResumeStore.getState().resume, 'profile')).toBe(PROFILE_TEXT);
+  });
+
+  it('validates the resulting Resume JSON before accepting AI output', async () => {
+    const resume = structuredClone(defaultResume);
+    resume.links = [{ id: 'link-1', label: 'Portfolio', url: 'https://good.example' }];
+    useResumeStore.getState().restore(resume);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(envelope({ original: 'https://good.example', suggested: 'not a valid link', rationale: 'A bad generated result.' }))));
+    renderPanel();
+    fireEvent.change(screen.getByLabelText('Section to review'), { target: { value: 'links' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review suggestion' }));
+    await screen.findByTestId('assistant-suggestion');
+    fireEvent.click(screen.getByRole('button', { name: 'Accept suggestion' }));
+    expect(await screen.findByText(/did not pass resume validation/i)).toBeInTheDocument();
+    expect(JSON.stringify(useResumeStore.getState().resume.links[0])).toContain('https://good.example');
+  });
+
+  it('marks a job description analysis stale when the pasted description changes', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(envelope({ job_title: 'Product Engineer', required_skills: [], preferred_skills: [], technologies: [], responsibilities: [], experience_requirements: [], education_requirements: [], keywords: [], ats_keywords: [] }))));
+    renderPanel();
+    fireEvent.click(screen.getByRole('tab', { name: 'Job description' }));
+    const input = screen.getByRole('textbox', { name: 'Job description' });
+    fireEvent.change(input, { target: { value: 'First role description.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze job description' }));
+    await screen.findByTestId('jd-report');
+    fireEvent.change(input, { target: { value: 'A different role description.' } });
+    expect(await screen.findByText(/outdated because the job description changed/i)).toBeInTheDocument();
+  });
+
+  it('runs Job Mode in order and applies a reviewed supported suggestion', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse(envelope({ job_title: 'Product Engineer', required_skills: ['Python'], preferred_skills: [], technologies: [], responsibilities: [], experience_requirements: [], education_requirements: [], keywords: ['Python'], ats_keywords: [] })))
+      .mockResolvedValueOnce(jsonResponse(envelope({ matching_skills: ['Python'], weak_evidence: [], missing_relevant_keywords: [], content_issues: [], formatting_concerns: [], experience_alignment: [], education_alignment: [], actionable_suggestions: [] })))
+      .mockResolvedValueOnce(jsonResponse(envelope({ suggestions: [{ id: 'job-suggestion', section: 'experience', entry_id: 'exp-1', original_content: EXPERIENCE_TEXT, suggested_content: 'Led product design for the core platform through launch.', reason: 'Concise wording.', supporting_requirement: 'platform leadership' }] }))));
+    renderPanel();
+    fireEvent.click(screen.getByRole('tab', { name: 'Job mode' }));
+    fireEvent.change(screen.getByLabelText('Job description'), { target: { value: 'Product Engineer. We need platform leadership.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze job description' }));
+    expect(await screen.findByText('Product Engineer')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Match resume' }));
+    expect(await screen.findByText('Matched skills')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare suggestions' }));
+    expect(await screen.findByTestId('tailoring-suggestions')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Accept suggestion 1' }));
+    expect(await screen.findByText(/Tailoring suggestion accepted/)).toBeInTheDocument();
+    expect(JSON.stringify(useResumeStore.getState().resume.experience[0].description)).toContain('through launch');
   });
 });

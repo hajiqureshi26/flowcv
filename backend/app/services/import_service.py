@@ -12,6 +12,17 @@ from app.schemas.resume import Resume
 
 
 class ImportService:
+    SECTION_HEADINGS = {
+        'profile': {'profile', 'summary', 'professional summary', 'objective', 'career objective', 'about me'},
+        'experience': {'experience', 'work experience', 'professional experience', 'employment', 'employment history'},
+        'education': {'education', 'academic background'},
+        'projects': {'projects', 'selected projects', 'personal projects'},
+        'skills': {'skills', 'technical skills', 'core skills', 'key skills', 'areas of expertise'},
+        'certifications': {'certifications', 'licenses', 'licenses and certifications'},
+        'achievements': {'achievements', 'awards', 'honors', 'honours'},
+        'links': {'links', 'websites'},
+    }
+
     def normalize_resume(self, raw: dict[str, Any]) -> Resume:
         cleaned = dict(raw)
         cleaned.setdefault('id', 'imported-resume')
@@ -83,52 +94,7 @@ class ImportService:
         if not extracted:
             raise ValueError('Could not extract any readable text from the PDF')
 
-        profile_text = self._normalize_text(extracted[:2000])
-        resume = {
-            'id': 'imported-pdf-resume',
-            'updatedAt': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
-            'personal': {
-                'name': self._extract_name(extracted),
-                'title': '',
-                'email': self._extract_email(extracted),
-                'phone': self._extract_phone(extracted),
-                'location': '',
-                'linkedin': '',
-                'github': '',
-                'website': '',
-            },
-            'profile': {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': profile_text}]}]},
-            'experience': [],
-            'education': [],
-            'projects': [],
-            'skills': [],
-            'certifications': [],
-            'achievements': [],
-            'links': [],
-            'custom': [{'id': 'imported-pdf-note', 'title': 'Imported PDF content', 'content': extracted}],
-            'sectionsOrder': ['profile', 'experience', 'education', 'projects', 'skills', 'certifications', 'achievements', 'links', 'custom'],
-            'hiddenSections': [],
-            'settings': {
-                'template': 'modern',
-                'font': 'inter',
-                'nameSize': 34,
-                'titleSize': 16,
-                'headingSize': 14,
-                'bodySize': 15,
-                'lineHeight': 1.45,
-                'letterSpacing': 0,
-                'margin': 18,
-                'sectionGap': 15,
-                'entryGap': 10,
-                'accent': '#256b61',
-                'divider': '#dfe5e2',
-                'dividerStyle': 'thin',
-                'text': '#263a36',
-                'skillsLayout': 'tags',
-                'headerLayout': 'left',
-            },
-        }
-        return self.normalize_resume(resume)
+        return self._resume_from_extracted_text(extracted, 'imported-pdf-resume')
 
     def import_from_docx(self, data: bytes) -> Resume:
         try:
@@ -146,49 +112,104 @@ class ImportService:
         if not content:
             raise ValueError('Could not extract any content from the DOCX file')
 
+        return self._resume_from_extracted_text(content, 'imported-docx-resume')
+
+    def _resume_from_extracted_text(self, extracted: str, resume_id: str) -> Resume:
+        sections: dict[str, list[str]] = {key: [] for key in self.SECTION_HEADINGS}
+        unclassified: list[str] = []
+        heading_to_section = {heading: section for section, names in self.SECTION_HEADINGS.items() for heading in names}
+        current: str | None = None
+        for raw_line in extracted.splitlines():
+            line = raw_line.strip()
+            if not line:
+                if current and sections[current] and sections[current][-1] != '':
+                    sections[current].append('')
+                elif current is None and unclassified and unclassified[-1] != '':
+                    unclassified.append('')
+                continue
+            heading = re.sub(r'[:\s]+$', '', line).lower()
+            heading = re.sub(r'^[•*#\-\s]+', '', heading)
+            matched = heading_to_section.get(heading)
+            if matched:
+                current = matched
+                continue
+            if current:
+                sections[current].append(line)
+            else:
+                unclassified.append(line)
+
+        name = self._extract_name(extracted)
+        email = self._extract_email(extracted)
+        phone = self._extract_phone(extracted)
+        contact_lines = {value.strip() for value in (name, email, phone) if value.strip()}
+        unclassified = [line for line in unclassified if line.strip() not in contact_lines]
+
+        def clean_lines(lines: list[str]) -> list[str]:
+            return [line.strip() for line in lines if line.strip()]
+
+        def blocks(lines: list[str]) -> list[str]:
+            paragraphs: list[str] = []
+            current_lines: list[str] = []
+            for line in lines:
+                if not line.strip():
+                    if current_lines:
+                        paragraphs.append('\n'.join(current_lines))
+                        current_lines = []
+                else:
+                    current_lines.append(line.strip())
+            if current_lines:
+                paragraphs.append('\n'.join(current_lines))
+            return paragraphs
+
+        profile_paragraphs = blocks(sections['profile'])
+        profile = {'type': 'doc', 'content': [
+            {'type': 'paragraph', 'content': [{'type': 'text', 'text': paragraph}]}
+            for paragraph in profile_paragraphs
+        ]}
+
+        def text_entries(key: str, field: str) -> list[dict[str, Any]]:
+            return [{'id': f'imported-{key}-{index}', field: paragraph} for index, paragraph in enumerate(blocks(sections[key]))]
+
+        skill_lines = clean_lines(sections['skills'])
+        skill_values: list[str] = []
+        for line in skill_lines:
+            parts = re.split(r'\s*[•|;,]\s*', line)
+            skill_values.extend(part.strip() for part in parts if part.strip())
+
+        links: list[dict[str, str]] = []
+        for index, line in enumerate(clean_lines(sections['links'])):
+            url_match = re.search(r'(?:https?://)?(?:www\.)?[\w.-]+\.[A-Za-z]{2,}(?:/[^\s]*)?', line)
+            if url_match:
+                url = url_match.group(0)
+                links.append({'id': f'imported-link-{index}', 'label': line, 'url': url})
+            else:
+                unclassified.append(line)
+
         resume = {
-            'id': 'imported-docx-resume',
+            'id': resume_id,
             'updatedAt': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
             'personal': {
-                'name': self._extract_name(content),
+                'name': name,
                 'title': '',
-                'email': self._extract_email(content),
-                'phone': self._extract_phone(content),
+                'email': email,
+                'phone': phone,
                 'location': '',
                 'linkedin': '',
                 'github': '',
                 'website': '',
             },
-            'profile': {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': self._normalize_text(content[:2000])}]}]},
-            'experience': [],
-            'education': [],
-            'projects': [],
-            'skills': [],
-            'certifications': [],
-            'achievements': [],
-            'links': [],
-            'custom': [{'id': 'imported-docx-note', 'title': 'Imported DOCX content', 'content': content}],
+            'profile': profile,
+            'experience': text_entries('experience', 'description'),
+            'education': text_entries('education', 'description'),
+            'projects': text_entries('projects', 'description'),
+            'skills': [{'id': 'imported-skills-0', 'category': 'Skills', 'items': skill_values}] if skill_values else [],
+            'certifications': [{'id': f'imported-certification-{i}', 'name': line} for i, line in enumerate(clean_lines(sections['certifications']))],
+            'achievements': [{'id': f'imported-achievement-{i}', 'title': line} for i, line in enumerate(clean_lines(sections['achievements']))],
+            'links': links,
+            'custom': [{'id': 'imported-unclassified-0', 'title': 'Unclassified extracted content', 'content': '\n'.join(unclassified).strip()}] if any(line.strip() for line in unclassified) else [],
             'sectionsOrder': ['profile', 'experience', 'education', 'projects', 'skills', 'certifications', 'achievements', 'links', 'custom'],
             'hiddenSections': [],
-            'settings': {
-                'template': 'modern',
-                'font': 'inter',
-                'nameSize': 34,
-                'titleSize': 16,
-                'headingSize': 14,
-                'bodySize': 15,
-                'lineHeight': 1.45,
-                'letterSpacing': 0,
-                'margin': 18,
-                'sectionGap': 15,
-                'entryGap': 10,
-                'accent': '#256b61',
-                'divider': '#dfe5e2',
-                'dividerStyle': 'thin',
-                'text': '#263a36',
-                'skillsLayout': 'tags',
-                'headerLayout': 'left',
-            },
+            'settings': {},
         }
         return self.normalize_resume(resume)
 
@@ -212,11 +233,23 @@ class ImportService:
 
     @staticmethod
     def _extract_name(value: str) -> str:
+        known_headings = {heading for headings in ImportService.SECTION_HEADINGS.values() for heading in headings}
         lines = [line.strip() for line in value.splitlines() if line.strip()]
-        for line in lines:
-            if '@' not in line and len(line.split()) <= 7:
+        boilerplate = {'resume', 'curriculum vitae', 'cv', 'contact', 'portfolio', 'professional profile'}
+        for line in lines[:6]:
+            normalized = re.sub(r'[:\s]+$', '', line).lower()
+            if normalized in known_headings:
+                break
+            words = line.split()
+            if (
+                2 <= len(words) <= 4
+                and '@' not in line
+                and not re.search(r'https?://|www\.|\d', line, re.I)
+                and normalized not in boilerplate
+                and all(word[:1].isupper() and (word[1:].islower() or not any(char.isalpha() for char in word[1:])) for word in words)
+            ):
                 return line
-        return 'Imported Resume'
+        return ''
 
 
 import_service = ImportService()

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "./journey.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Folio — Resume Builder",
-  description: "Create and refine a professional resume. Your work saves privately in this browser.",
+  description: "Create and refine a professional resume. Your work is saved in this browser.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

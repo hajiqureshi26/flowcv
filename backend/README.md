@@ -1,6 +1,6 @@
 # FlowCV backend
 
-This backend is the Stage 2 service layer for the existing FlowCV frontend.
+This backend is the stateless service layer for the existing FlowCV frontend.
 
 It is designed to work around the current Resume JSON model rather than replace it.
 
@@ -11,6 +11,8 @@ It is designed to work around the current Resume JSON model rather than replace 
 - Template metadata is served from a static repository. PDF rendering uses a backend style strategy for `modern`, `ats`, `classic`, `executive`, and `sidebar`.
 - PDF/DOCX imports extract content on a best-effort basis and normalize it into the same Resume JSON contract.
 - The browser remains IndexedDB/local-first. The API client is available for later integration and does not replace Stage 1 persistence.
+- AI requests pass through structured FastAPI schemas, the orchestrator, Redis rate limits and short-lived cache, provider health/cooldown, and the provider manager's configured Gemini/OpenRouter fallback.
+- AI findings and edits are proposals. The backend does not persist resumes or apply suggestions; accepted edits return to the browser's Resume JSON and IndexedDB flow.
 
 There is no active database connection, authentication, or AI feature in Stage 2.
 
@@ -28,6 +30,7 @@ Runtime configuration is read from environment variables. See `.env.example` for
 ## API surface
 
 - GET /health
+- GET /health/redis
 - POST /api/resumes
 - GET /api/resumes/{resume_id}
 - PUT /api/resumes/{resume_id}
@@ -38,6 +41,11 @@ Runtime configuration is read from environment variables. See `.env.example` for
 - POST /api/imports/resume-json
 - POST /api/imports/pdf
 - POST /api/imports/docx
+- POST /api/ai/resume/health
+- POST /api/ai/resume/improve
+- POST /api/ai/jd/analyze
+- POST /api/ai/ats/analyze
+- POST /api/ai/tailor
 
 The PDF endpoint accepts `templateId` as an optional query parameter, for example `POST /api/resumes/{resume_id}/pdf?templateId=ats`. When omitted, it uses `resume.settings.template`.
 
@@ -45,7 +53,9 @@ PDF and DOCX upload routes require matching `.pdf`/`.docx` filenames and accepte
 
 API errors use an `error` object with a stable `code` and human-readable `message`; validation failures may also include field-level `details`. Common statuses are 400 (bad request), 404 (not found), 413 (size limit), 415 (unsupported media type), 422 (validation), and 500 (generic internal error). Internal exception details are logged server-side and are not returned to clients.
 
-`frontend/api/client.ts` provides typed Resume CRUD, template lookups, PDF blob downloads, Resume JSON validation, and PDF/DOCX multipart uploads. Requests have a 30-second timeout, normalize network and structured HTTP errors, and validate successful Resume responses against the existing frontend schema. The editor itself remains on IndexedDB and does not call this client in Stage 2.
+`frontend/api/client.ts` provides typed Resume CRUD, template lookups, PDF blob downloads, Resume JSON validation, PDF/DOCX multipart uploads, and structured AI requests. Requests have a 30-second timeout, normalize network and structured HTTP errors, and validate successful Resume responses against the existing frontend schema. The editor remains local-first; AI calls send only the requested resume/JD inputs for stateless processing.
+
+AI result caching is short-lived, scoped to an anonymous actor fingerprint, operation, model policy, input fingerprint, and prompt/cache contract version. Redis keys contain fingerprints rather than raw resume or job-description text. Configure a unique `AI_IDENTITY_SECRET` with at least 32 characters when `APP_ENV=production`; the service rejects the development placeholder in production.
 
 ## Import limitations
 

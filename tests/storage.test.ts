@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { defaultResume } from '../resume/defaults';
-import { loadResume, saveResume } from '../storage/indexedDb';
+import { loadResume, loadResumeSnapshots, saveResume, saveResumeSnapshot } from '../storage/indexedDb';
 
 describe('IndexedDB resume storage',()=>{
   beforeEach(async()=>{await new Promise<void>(resolve=>{const req=indexedDB.deleteDatabase('folio-resume-v1');req.onsuccess=()=>resolve();req.onerror=()=>resolve();req.onblocked=()=>resolve();});});
@@ -22,5 +22,14 @@ describe('IndexedDB resume storage',()=>{
     await new Promise<void>((resolve,reject)=>{const tx=db.transaction('documents','readwrite');tx.objectStore('documents').put(legacy,'active');tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});
     db.close();
     expect((await loadResume()).personal.name).toBe('Legacy Candidate');
+  });
+  it('keeps local recovery snapshots bounded and does not replace the current resume',async()=>{
+    const current=structuredClone(defaultResume);current.personal.name='Current Document';
+    await saveResume(current);
+    for(let i=0;i<14;i++){const snapshot=structuredClone(current);snapshot.personal.name=`Snapshot ${i}`;await saveResumeSnapshot(snapshot);}
+    const versions=await loadResumeSnapshots();
+    expect(versions).toHaveLength(12);
+    expect(versions[0].resume.personal.name).toBe('Snapshot 13');
+    expect((await loadResume()).personal.name).toBe('Current Document');
   });
 });

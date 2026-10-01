@@ -34,6 +34,14 @@ describe('AI API client', () => {
     expect(response.provider).toEqual({ name: 'gemini', model: 'gemini-2.5-flash', fallback_used: false, cached: false });
   });
 
+  it('posts the local resume to the semantic health endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(envelope({ findings: [] })));
+    vi.stubGlobal('fetch', fetchMock);
+    await aiApi.analyzeResumeHealth(defaultResume);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:8000/api/ai/resume/health');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ resume: defaultResume });
+  });
+
   it('posts job description, ATS and tailoring requests to their endpoints', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(envelope({ suggestions: [] })));
     vi.stubGlobal('fetch', fetchMock);

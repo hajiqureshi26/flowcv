@@ -11,6 +11,8 @@ from app.ai.schemas import (
     JDAnalysisResult,
     ResumeImproveRequest,
     ResumeImproveResult,
+    ResumeHealthRequest,
+    ResumeHealthResult,
     TailoringRequest,
     TailoringResult,
 )
@@ -33,6 +35,16 @@ async def improve_resume(
 ) -> AIResponse[ResumeImproveResult]:
     actor = actor_fingerprint(request, get_settings())
     return await orchestrator.improve_resume(payload, actor)
+
+
+@router.post('/resume/health', response_model=AIResponse[ResumeHealthResult])
+async def analyze_resume_health(
+    payload: ResumeHealthRequest,
+    request: Request,
+    orchestrator: AIOrchestrator = Depends(get_ai_orchestrator),
+) -> AIResponse[ResumeHealthResult]:
+    actor = actor_fingerprint(request, get_settings())
+    return await orchestrator.analyze_resume_health(payload, actor)
 
 
 @router.post('/jd/analyze', response_model=AIResponse[JDAnalysisResult])
