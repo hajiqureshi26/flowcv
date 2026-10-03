@@ -30,6 +30,7 @@ def test_agents_build_provider_neutral_tasks_and_keep_resume_facts_as_input() ->
     assert all(field in tailor_task.user_prompt for field in ('suggestions', 'entry_id', 'original_content', 'suggested_content', 'supporting_requirement'))
     assert 'plain strings' in tailor_task.user_prompt
     assert 'never objects or arrays' in tailor_task.user_prompt
+    assert 'unique short string' in tailor_task.user_prompt
     assert not any(hasattr(agent, 'provider') for agent in [ResumeAgent(), JDAnalyzerAgent(), ATSAgent(), TailoringAgent()])
 
 
