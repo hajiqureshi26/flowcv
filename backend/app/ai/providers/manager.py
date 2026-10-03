@@ -30,7 +30,7 @@ class ProviderManager:
         for index, provider in enumerate(providers):
             if index == 1:
                 fallback_used = True
-                if last_error is not None and not last_error.retryable:
+                if last_error is not None and not (last_error.retryable or last_error.category == 'invalid_request'):
                     break
             if not provider.configured:
                 continue
@@ -51,7 +51,7 @@ class ProviderManager:
                         error.category,
                         self._cooldown_seconds,
                     )
-                else:
+                elif error.category != 'invalid_request':
                     break
             except Exception as exc:
                 last_error = AIProviderError('unavailable', provider.name)

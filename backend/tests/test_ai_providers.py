@@ -133,14 +133,21 @@ def test_manager_falls_back_once_on_temporary_error_and_skips_unconfigured_prima
     asyncio.run(check())
 
 
-def test_manager_does_not_fallback_for_invalid_user_or_provider_data() -> None:
+def test_manager_falls_back_for_provider_specific_invalid_request_but_not_invalid_output() -> None:
     async def check() -> None:
         primary = FakeProvider('gemini', AIProviderError('invalid_request', 'gemini'))
-        fallback = FakeProvider('openrouter', ResumeImproveResult(original='x', suggested='y'))
+        fallback = FakeProvider('openrouter', ResumeImproveResult(original='x', suggested='y', rationale='clearer'))
         manager = ProviderManager(primary, fallback, FakeHealth())
+        output = await manager.generate(task())
+        assert output.provider == 'openrouter' and output.fallback_used
+        assert primary.calls == 1 and fallback.calls == 1
+
+        invalid_output_primary = FakeProvider('gemini', AIProviderError('invalid_response', 'gemini'))
+        unused_fallback = FakeProvider('openrouter', ResumeImproveResult(original='x', suggested='y', rationale='clearer'))
+        invalid_output_manager = ProviderManager(invalid_output_primary, unused_fallback, FakeHealth())
         with pytest.raises(AIProviderError) as error:
-            await manager.generate(task())
-        assert error.value.category == 'invalid_request'
-        assert primary.calls == 1 and fallback.calls == 0
+            await invalid_output_manager.generate(task())
+        assert error.value.category == 'invalid_response'
+        assert invalid_output_primary.calls == 1 and unused_fallback.calls == 0
 
     asyncio.run(check())
