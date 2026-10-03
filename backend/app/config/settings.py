@@ -57,11 +57,25 @@ class Settings(BaseSettings):
     frontend_url: str | None = Field(default=None, validation_alias='FRONTEND_URL')
 
     @model_validator(mode='after')
-    def require_production_identity_secret(self) -> 'Settings':
+    def require_production_security_settings(self) -> 'Settings':
         if self.app_env.casefold() in {'production', 'prod'}:
             secret = self.ai_identity_secret.strip()
             if len(secret) < 32 or secret == 'development-anonymous-rate-limit-secret' or 'replace-with' in secret.casefold():
                 raise ValueError('AI_IDENTITY_SECRET must be a unique secret of at least 32 characters in production')
+
+            normalized = [origin.strip().rstrip('/') for origin in self.cors_origins if origin and origin.strip()]
+            if self.frontend_url:
+                normalized.append(self.frontend_url.strip().rstrip('/'))
+
+            localhost_origins = {'http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3100', 'http://127.0.0.1:3100'}
+            if not normalized or all(origin in localhost_origins for origin in normalized):
+                raise ValueError('CORS_ORIGINS must be set to the deployed frontend origin(s) in production; localhost defaults are not allowed')
+
+            if self.frontend_url and self.frontend_url.strip().rstrip('/') in localhost_origins:
+                raise ValueError('FRONTEND_URL must not point to localhost in production')
+
+            if any(origin in localhost_origins for origin in normalized):
+                raise ValueError('CORS_ORIGINS must not silently include localhost origins in production')
         return self
 
     @property

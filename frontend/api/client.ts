@@ -11,7 +11,14 @@ import type {
   TailoringResult,
 } from '@/frontend/ai/types';
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:8000').replace(/\/+$/, '');
+const isProduction = process.env.NODE_ENV === 'production';
+const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE?.trim();
+
+if (isProduction && !configuredApiBase) {
+  throw new Error('NEXT_PUBLIC_API_BASE is required in production. Set it to the deployed backend URL.');
+}
+
+const API_BASE = (configuredApiBase ?? (isProduction ? '' : 'http://127.0.0.1:8000')).replace(/\/+$/, '');
 const REQUEST_TIMEOUT_MS = 30_000;
 
 export class ApiError extends Error {

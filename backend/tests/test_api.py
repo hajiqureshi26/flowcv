@@ -154,9 +154,29 @@ def test_production_settings_reject_development_identity_secret() -> None:
     from app.config.settings import Settings
 
     with pytest.raises(ValueError, match='AI_IDENTITY_SECRET'):
-        Settings(_env_file=None, APP_ENV='production')
-    settings = Settings(_env_file=None, APP_ENV='production', AI_IDENTITY_SECRET='a' * 40)
+        Settings(_env_file=None, APP_ENV='production', CORS_ORIGINS=['https://flowcv.example'])
+    settings = Settings(
+        _env_file=None,
+        APP_ENV='production',
+        CORS_ORIGINS=['https://flowcv.example'],
+        AI_IDENTITY_SECRET='a' * 40,
+    )
     assert settings.ai_identity_secret == 'a' * 40
+
+
+def test_production_settings_require_explicit_cors_origins() -> None:
+    from app.config.settings import Settings
+
+    with pytest.raises(ValueError, match='CORS_ORIGINS'):
+        Settings(_env_file=None, APP_ENV='production', AI_IDENTITY_SECRET='a' * 40)
+
+    settings = Settings(
+        _env_file=None,
+        APP_ENV='production',
+        CORS_ORIGINS=['https://flowcv.example'],
+        AI_IDENTITY_SECRET='a' * 40,
+    )
+    assert settings.allowed_cors_origins == ['https://flowcv.example']
 
 
 def test_structured_api_errors_hide_internal_details(monkeypatch: pytest.MonkeyPatch) -> None:
