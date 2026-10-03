@@ -45,3 +45,20 @@ test('dialogs move focus in, close on Escape, and return focus to their trigger'
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(designTrigger).toBeFocused();
 });
+
+test('print export contains only paginated resume pages, not editor chrome', async ({ page }) => {
+  await page.goto('/editor');
+  await expect(page.getByRole('heading', { name: 'Build your resume' })).toBeVisible();
+  await page.emulateMedia({ media: 'print' });
+
+  await expect(page.locator('.command-center')).toBeHidden();
+  await expect(page.locator('.topbar')).toBeHidden();
+  await expect(page.locator('.editor')).toBeHidden();
+  await expect(page.locator('.preview-toolbar')).toBeHidden();
+  await expect(page.locator('.page-frame .resume-header h1')).toBeVisible();
+  await expect(page.locator('.measurement-root')).toBeHidden();
+
+  const pdf = await page.pdf({ preferCSSPageSize: true });
+  expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  expect(await page.locator('.page-frame').count()).toBeGreaterThan(0);
+});

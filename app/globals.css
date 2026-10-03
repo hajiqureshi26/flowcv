@@ -104,3 +104,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .format-bar{max-width:100%;overflow-x:auto;flex-wrap:nowrap;overscroll-behavior-inline:contain}.format-bar button{min-height:40px;flex:0 0 auto}
 @media(max-width:760px){.topbar{gap:8px}.topbar .doc-title{flex:1}.topbar .top-actions{max-width:58vw}.mobile-tabs button{min-height:44px}.section-actions button,.entry-move button,.section-open,.person-card>button,.add-section-row button,.add-entry,.zoom-controls button,.preview-toolbar button,.command-actions button,.command-center-title>button,.command-more summary{min-height:44px}.section-actions button{padding-inline:5px}.editor{overscroll-behavior:contain}.ai-panel{max-height:96dvh}.design-lab-dialog{max-height:96dvh}.command-center{max-height:35dvh;overflow:auto}.command-status-grid{gap:6px}.command-status-grid>div{padding:8px}.command-actions{gap:6px}}
 @media(prefers-reduced-motion:reduce){html:focus-within{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
+
+@media print{
+	.app-shell>:not(.workspace),
+	.workspace>:not(.preview-area),
+	.preview-area>:not(.canvas-scroll),
+	.canvas-scroll>:not(.page-frame){display:none!important}
+	.workspace,.preview-area,.canvas-scroll{display:block!important;height:auto;overflow:visible;background:white}
+	.page-frame{display:flex!important}
+}
