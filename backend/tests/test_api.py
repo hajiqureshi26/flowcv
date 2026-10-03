@@ -85,6 +85,16 @@ def make_resume(resume_id: str = 'resume-123') -> dict:
     }
 
 
+def assert_no_null_values(value: object) -> None:
+    if isinstance(value, dict):
+        assert all(item is not None for item in value.values())
+        for item in value.values():
+            assert_no_null_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            assert_no_null_values(item)
+
+
 def test_health_endpoint() -> None:
     response = client.get('/health')
     assert response.status_code == 200
@@ -216,15 +226,18 @@ def test_resume_crud_round_trip() -> None:
     assert create_response.status_code == 201
     created = create_response.json()
     assert created['id'] == payload['id']
+    assert_no_null_values(created['profile'])
 
     get_response = client.get(f"/api/resumes/{payload['id']}")
     assert get_response.status_code == 200
     assert get_response.json()['personal']['name'] == 'Jordan Lee'
+    assert_no_null_values(get_response.json()['profile'])
 
     update_payload = {**payload, 'personal': {**payload['personal'], 'name': 'Jordan M. Lee'}}
     put_response = client.put(f"/api/resumes/{payload['id']}", json={'resume': update_payload})
     assert put_response.status_code == 200
     assert put_response.json()['personal']['name'] == 'Jordan M. Lee'
+    assert_no_null_values(put_response.json()['profile'])
 
     delete_response = client.delete(f"/api/resumes/{payload['id']}")
     assert delete_response.status_code == 204
@@ -311,6 +324,7 @@ def test_pdf_generation_endpoint() -> None:
     )
     assert import_response.status_code == 200
     imported_resume = import_response.json()
+    assert_no_null_values(imported_resume['profile'])
     assert imported_resume['personal']['name'] == 'Jordan Lee'
     assert imported_resume['personal']['email'] == 'jordan@example.com'
     assert 'Improved platform reliability' in imported_resume['experience'][0]['description']
@@ -364,7 +378,7 @@ def test_import_structures_explicit_headings_and_preserves_unclassified_text() -
     imported = response.json()
     assert imported['personal']['name'] == 'Mira Patel'
     assert 'Design leader focused on accessible products.' in imported['profile']['content'][0]['content'][0]['text']
-    assert imported['experience'][0]['title'] is None
+    assert 'title' not in imported['experience'][0]
     assert 'Product lead at Crescent Studio, 2021–2024' in imported['experience'][0]['description']
     assert imported['skills'][0]['items'] == ['Research', 'Prototyping', 'Accessibility']
     assert 'An original note that has no section heading.' in imported['custom'][0]['content']

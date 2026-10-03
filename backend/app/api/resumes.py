@@ -8,12 +8,12 @@ from app.services.resume_service import resume_service
 router = APIRouter(prefix='/resumes', tags=['resumes'])
 
 
-@router.post('', status_code=201)
+@router.post('', status_code=201, response_model_exclude_none=True)
 def create_resume(payload: ResumeCreate) -> Resume:
     return resume_service.create_resume(payload.resume)
 
 
-@router.get('/{resume_id}')
+@router.get('/{resume_id}', response_model_exclude_none=True)
 def get_resume(resume_id: str) -> Resume:
     resume = resume_service.get_resume(resume_id)
     if resume is None:
@@ -21,7 +21,7 @@ def get_resume(resume_id: str) -> Resume:
     return resume
 
 
-@router.put('/{resume_id}')
+@router.put('/{resume_id}', response_model_exclude_none=True)
 def update_resume(resume_id: str, payload: ResumeUpdate) -> Resume:
     resume = resume_service.update_resume(resume_id, payload.resume)
     if resume is None:

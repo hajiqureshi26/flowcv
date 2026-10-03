@@ -32,7 +32,7 @@ async def _parse_import(data: bytes, extension: str) -> Resume:
         logger.info('resume_import_finished type=%s duration_ms=%d', extension, round((monotonic() - started) * 1000))
 
 
-@router.post('/resume-json')
+@router.post('/resume-json', response_model_exclude_none=True)
 def import_resume_json(payload: dict[str, object]) -> Resume:
     try:
         return Resume.model_validate(payload)
@@ -71,7 +71,7 @@ async def _read_upload(file: UploadFile, expected_extension: str, accepted_types
     return data
 
 
-@router.post('/pdf')
+@router.post('/pdf', response_model_exclude_none=True)
 async def import_resume_pdf(file: Annotated[UploadFile, File(...)]) -> Resume:
     try:
         data = await _read_upload(file, 'pdf', {'application/pdf', 'application/x-pdf', 'application/octet-stream'})
@@ -80,7 +80,7 @@ async def import_resume_pdf(file: Annotated[UploadFile, File(...)]) -> Resume:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post('/docx')
+@router.post('/docx', response_model_exclude_none=True)
 async def import_resume_docx(file: Annotated[UploadFile, File(...)]) -> Resume:
     try:
         data = await _read_upload(
