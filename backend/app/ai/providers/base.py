@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Literal, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.ai.agents.base import AgentTask
+
+logger = logging.getLogger(__name__)
 
 
 ProviderFailure = Literal['timeout', 'rate_limit', 'quota', 'unavailable', 'model_unavailable', 'invalid_response', 'invalid_request']
@@ -62,4 +65,36 @@ def parse_structured_response(provider: str, response_model: type[BaseModel], co
     try:
         return response_model.model_validate_json(content)
     except Exception as exc:
+        issues: list[str] = []
+        if isinstance(exc, ValidationError):
+            allowed_fields = _schema_field_names(response_model.model_json_schema())
+            for error in exc.errors(include_input=False, include_context=False, include_url=False)[:8]:
+                path = '.'.join(
+                    '#' if isinstance(part, int) else str(part)
+                    for part in error.get('loc', ())
+                    if isinstance(part, int) or part in allowed_fields
+                )
+                issues.append(f'{path or "<root>"}:{error.get("type", "validation_error")}')
+        else:
+            issues.append(type(exc).__name__)
+        logger.warning(
+            'ai_structured_response_invalid provider=%s response_model=%s issues=%s',
+            provider,
+            response_model.__name__,
+            ','.join(issues),
+        )
         raise AIProviderError('invalid_response', provider) from exc
+
+
+def _schema_field_names(value: object) -> set[str]:
+    fields: set[str] = set()
+    if isinstance(value, dict):
+        properties = value.get('properties')
+        if isinstance(properties, dict):
+            fields.update(properties)
+        for nested in value.values():
+            fields.update(_schema_field_names(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            fields.update(_schema_field_names(nested))
+    return fields

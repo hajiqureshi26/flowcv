@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.ai.agents.base import AgentTask
-from app.ai.providers.base import AIProviderError, ProviderOutput
+from app.ai.providers.base import AIProviderError, ProviderOutput, parse_structured_response
 from app.ai.providers.gemini import GeminiProvider
 from app.ai.providers.manager import ProviderManager
 from app.ai.providers.openrouter import OpenRouterProvider
@@ -151,3 +151,15 @@ def test_manager_falls_back_for_provider_specific_invalid_request_but_not_invali
         assert invalid_output_primary.calls == 1 and unused_fallback.calls == 0
 
     asyncio.run(check())
+
+
+def test_structured_output_diagnostics_exclude_response_values(caplog: pytest.LogCaptureFixture) -> None:
+    with pytest.raises(AIProviderError):
+        parse_structured_response(
+            'gemini',
+            ResumeImproveResult,
+            '{"original":"PRIVATE RESUME TEXT","suggested":7,"rationale":"clearer"}',
+        )
+
+    assert 'suggested:string_type' in caplog.text
+    assert 'PRIVATE RESUME TEXT' not in caplog.text
