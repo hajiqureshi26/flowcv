@@ -28,6 +28,8 @@ def test_agents_build_provider_neutral_tasks_and_keep_resume_facts_as_input() ->
     assert tailor_task.response_model.__name__ == 'TailoringResult'
     assert all('Do not invent' in task.system_prompt for task in [resume_task, jd_task, ats_task, tailor_task])
     assert all(field in tailor_task.user_prompt for field in ('suggestions', 'entry_id', 'original_content', 'suggested_content', 'supporting_requirement'))
+    assert 'plain strings' in tailor_task.user_prompt
+    assert 'never objects or arrays' in tailor_task.user_prompt
     assert not any(hasattr(agent, 'provider') for agent in [ResumeAgent(), JDAnalyzerAgent(), ATSAgent(), TailoringAgent()])
 
 
