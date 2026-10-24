@@ -12,7 +12,9 @@ export default function VersionHistory({ resume, resumeId, onClose, onRestore }:
   async function reload() { setSnapshots(await browserResumeStorage.loadSnapshots(resumeId)); }
   useEffect(() => {
     let active = true;
-    browserResumeStorage.loadSnapshots(resumeId).then(value => { if (active) setSnapshots(value); });
+    browserResumeStorage.loadSnapshots(resumeId).then(value => { if (active) setSnapshots(value); }).catch(() => {
+      if (active) setMessage('Could not read recovery history from this browser. Check available storage and try again.');
+    });
     return () => { active = false; };
   }, [resumeId]);
 

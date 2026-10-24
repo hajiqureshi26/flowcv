@@ -3,6 +3,8 @@ import { test, expect } from '@playwright/test';
 test('landing, editor, and template detail flow are reachable', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Your next chapter starts with a clear story/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Import resume' })).toHaveAttribute('href', '/import');
+  await expect(page.getByRole('link', { name: 'Already have a resume? Import a PDF or DOCX.' })).toHaveAttribute('href', '/import');
   await page.getByRole('link', { name: /Create your resume/ }).first().click();
   await expect(page.getByRole('heading', { name: 'How would you like to start?' })).toBeVisible();
   await page.goto('/editor');

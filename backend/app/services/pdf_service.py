@@ -21,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 class TemplateRenderer:
     styles = {
-        'modern': '.resume-sections { column-count: 2; column-gap: 8mm; } .resume-section { break-inside: avoid-column; } .resume-header { border-left: 4px solid var(--accent); padding-left: 3mm; }',
-        'ats': '.resume-header { border-bottom: 1px solid #222; } .resume-section h2 { border-bottom-color: #555; }',
-        'classic': '.resume { font-family: Georgia, serif; } .resume-header { text-align: center; border-bottom: 3px double var(--divider); }',
-        'executive': '.resume { font-size: 9.5pt; } .resume-section { margin-bottom: 3mm; } .resume-section h2 { margin: 2mm 0 1mm; } .resume-entry { margin-bottom: 1.5mm; }',
-        'sidebar': '.resume-header { display: grid; grid-template-columns: minmax(0, 1fr) 34%; gap: 8mm; align-items: end; } .contact { border-left: 2px solid var(--accent); padding-left: 4mm; }',
+        'modern': '.resume-columns { grid-template-columns: 31% minmax(0, 1fr); }',
+        'ats': '.resume-header { border-bottom: 2px solid #202d29; } h1, h2 { color: #20312c; }',
+        'classic': '.resume { font-family: Georgia, serif; } .resume-section h2 { border-bottom-color: #56625c; }',
+        'executive': '',
+        'sidebar': '.resume-columns { grid-template-columns: 34% minmax(0, 1fr); }',
     }
 
     @classmethod
@@ -94,13 +94,17 @@ class PDFService:
     def _build_resume_html(self, resume: Resume, template: str) -> str:
         template_style = template_renderer.style_for(template)
         sections: list[str] = []
+        sidebar_sections: list[str] = []
+        sidebar_ids = {'skills', 'education', 'certifications', 'links'}
+        is_two_column = template in {'modern', 'sidebar'}
         for section_id in resume.sectionsOrder:
             if section_id in resume.hiddenSections:
                 continue
+            section_target = sidebar_sections if is_two_column and section_id in sidebar_ids else sections
             if section_id == 'profile':
                 content = ''.join(self._render_rich_text(block) for block in resume.profile.content)
                 if content.strip():
-                    sections.append(f'<section class="resume-section"><h2>Profile</h2>{content}</section>')
+                    section_target.append(f'<section class="resume-section"><h2>Profile</h2>{content}</section>')
                 continue
             entries = getattr(resume, section_id)
             if not entries:
@@ -120,15 +124,34 @@ class PDFService:
                 if section_id == 'experience':
                     period_end = 'Present' if entry.current else (entry.end or '')
                     items.append(
-                        f"<div><strong>{escape(entry.title or 'Role')}</strong>"
-                        f"<p>{escape(entry.company or '')} | {escape(entry.location or '')}</p>"
-                        f"<p>{escape(entry.start or '')} - {escape(period_end)}</p>"
+                        '<div class="resume-entry">'
+                        f'<div class="entry-head"><strong>{escape(entry.title or "Role")}</strong><span>{escape(entry.start or "")}{" - " if entry.start and period_end else ""}{escape(period_end)}</span></div>'
+                        f'<div class="entry-sub"><b>{escape(entry.company or "")}</b>{f" | {escape(entry.location)}" if entry.location else ""}</div>'
                         f"{self._render_entry_details(entry)}</div>"
+                    )
+                elif section_id == 'education':
+                    period = ' - '.join(value for value in (entry.start, entry.end) if value)
+                    institution = ' | '.join(value for value in (entry.institution, entry.location) if value)
+                    details = self._render_rich_text(entry.description)
+                    items.append(
+                        '<div class="resume-entry">'
+                        f"<div class=\"entry-head\"><strong>{escape(entry.degree or 'Education')}</strong>"
+                        f"<span>{escape(period)}</span></div>"
+                        f"<p class=\"resume-meta\">{escape(institution)}</p>"
+                        f"{f'<p class=\"resume-meta\">{escape(entry.grade)}</p>' if entry.grade else ''}"
+                        f"{details}</div>"
                     )
                 elif section_id == 'skills':
                     skill_values = entry.items if isinstance(entry.items, list) else str(entry.items or '').split(',')
-                    joined = escape(' · '.join(skill_values))
-                    items.append(f"<div><strong>{escape(entry.category or 'Skills')}</strong><p>{joined}</p></div>")
+                    skill_values = [value.strip() for value in skill_values if value.strip()]
+                    if resume.settings.skillsLayout == 'tags':
+                        skill_content = '<div class="skill-tags">' + ''.join(f'<span>{escape(value)}</span>' for value in skill_values) + '</div>'
+                    elif resume.settings.skillsLayout == 'columns':
+                        skill_content = '<ul class="skill-columns">' + ''.join(f'<li>{escape(value)}</li>' for value in skill_values) + '</ul>'
+                    else:
+                        separator = ' · ' if resume.settings.skillsLayout == 'inline' else ', '
+                        skill_content = f'<p class="skill-list">{escape(separator.join(skill_values))}</p>'
+                    items.append(f"<div><strong>{escape(entry.category or 'Skills')}</strong>{skill_content}</div>")
                 else:
                     heading = entry.name or entry.title or entry.label or 'Item'
                     detail = entry.company or entry.institution or entry.content or ''
@@ -136,7 +159,17 @@ class PDFService:
                         f"<div><strong>{escape(heading)}</strong><p>{escape(detail)}</p>"
                         f"{self._render_entry_details(entry)}</div>"
                     )
-            sections.append(f'<section class="resume-section"><h2>{escape(labels.get(section_id, section_id.title()))}</h2>{"".join(items)}</section>')
+            section_target.append(f'<section class="resume-section"><h2>{escape(labels.get(section_id, section_id.title()))}</h2>{"".join(items)}</section>')
+
+        if is_two_column:
+            sections_markup = (
+                '<main class="resume-columns">'
+                f'<aside class="resume-sidebar">{"".join(sidebar_sections)}</aside>'
+                f'<div class="resume-main">{"".join(sections)}</div>'
+                '</main>'
+            )
+        else:
+            sections_markup = f'<main class="resume-main">{"".join(sections)}</main>'
 
         contact_items = []
         for value in (
@@ -166,21 +199,41 @@ class PDFService:
           <head>
                         <meta charset="utf-8">
             <style>
-                            @page {{ size: A4; margin: 14mm; }}
+                            @page {{ size: A4; margin: {resume.settings.margin}mm; }}
                             * {{ box-sizing: border-box; }}
-                            body {{ font-family: {font_family}; margin: 0; padding: 0; color: {resume.settings.text}; font-size: {resume.settings.bodySize}px; line-height: {resume.settings.lineHeight}; }}
+                            body {{ font-family: {font_family}; margin: 0; padding: 0; color: {resume.settings.text}; font-size: {resume.settings.bodySize}px; line-height: {resume.settings.lineHeight}; letter-spacing: {resume.settings.letterSpacing}px; }}
                             .resume {{ --accent: {resume.settings.accent}; --divider: {resume.settings.divider}; overflow-wrap: anywhere; }}
-                            .resume-header {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6mm; align-items: end; margin-bottom: 5mm; padding-bottom: 3mm; }}
+                            .resume-header {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6mm; align-items: end; margin-bottom: {resume.settings.sectionGap}px; padding-bottom: 3mm; }}
                             .identity {{ min-width: 0; }}
-                            h1 {{ color: var(--accent); font-size: {resume.settings.nameSize}px; line-height: 1.12; margin: 0; overflow-wrap: anywhere; }}
-                            .title {{ font-size: {resume.settings.titleSize}px; margin: 1.5mm 0 0; }}
-                            h2 {{ font-size: {resume.settings.headingSize}px; margin: 0 0 2mm; padding-bottom: 1mm; border-bottom: 1px solid var(--divider); break-after: avoid; }}
+                            h1 {{ color: var(--accent); font-size: {resume.settings.nameSize}px; font-weight: 800; letter-spacing: -1.2px; line-height: 1.12; margin: 0 0 3px; overflow-wrap: anywhere; }}
+                            .title {{ font-size: {resume.settings.titleSize}px; color: #53645f; margin: 0 0 9px; }}
+                            h2 {{ color: var(--accent); font-size: {resume.settings.headingSize}px; font-weight: 700; text-transform: uppercase; letter-spacing: .85px; margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--divider); break-after: avoid; }}
                             p {{ font-size: inherit; line-height: inherit; margin: 1mm 0; overflow-wrap: anywhere; }}
-                            .contact {{ font-size: 9pt; max-width: 58mm; overflow-wrap: anywhere; }}
-                            .resume-section {{ margin-bottom: 5mm; break-inside: auto; }}
-                            .resume-entry {{ margin-bottom: 3mm; break-inside: auto; }}
+                            .contact {{ display: flex; flex-wrap: wrap; gap: 4px 12px; color: #63736d; font-size: .82em; max-width: 58mm; overflow-wrap: anywhere; }}
+                            .resume-section {{ margin-bottom: {resume.settings.sectionGap}px; break-inside: auto; }}
+                            .resume-columns {{ display: grid; grid-template-columns: 31% minmax(0, 1fr); gap: 22px; align-items: start; }}
+                            .resume-sidebar {{ min-width: 0; border-right: 1px solid var(--divider); padding-right: 16px; }}
+                            .resume-main {{ min-width: 0; }}
+                            .resume-entry {{ margin-bottom: {resume.settings.entryGap if template != 'executive' else round(resume.settings.entryGap * .7, 2)}px; break-inside: auto; }}
+                            .resume-section h2 {{ border-bottom-style: {('none' if resume.settings.dividerStyle == 'none' else 'double' if resume.settings.dividerStyle == 'styled' else 'solid')}; border-bottom-width: {2 if resume.settings.dividerStyle == 'medium' else 1}px; }}
+                            .divider-none .resume-header, .divider-none .resume-section h2 {{ border-color: transparent; }}
+                            .divider-medium .resume-header {{ border-bottom-width: 2px; }}
+                            .header-center {{ text-align: center; }}
+                            .header-center .contact {{ margin-left: auto; margin-right: auto; }}
+                            .template-executive .resume-section {{ margin-bottom: {round(resume.settings.sectionGap * .72, 2)}px; }}
+                            .template-executive .resume-header {{ padding-bottom: 8px; }}
+                            .header-center .contact {{ margin-left: auto; margin-right: auto; }}
+                            .divider-styled .resume-header {{ border-bottom: 0; border-top: 3px solid var(--accent); padding-top: 9px; }}
+                            .divider-styled .resume-section h2 {{ border-bottom: 0; border-left: 3px solid var(--accent); padding: 2px 0 2px 8px; }}
+                            .entry-head {{ display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }}
+                            .entry-sub {{ margin-top: 2px; color: #66766f; }}
                             .resume-entry strong {{ break-after: avoid; }}
                             .resume-meta {{ color: #4b5563; font-size: .92em; }}
+                            .skill-tags {{ display: flex; flex-wrap: wrap; gap: 1mm; margin-top: 1.2mm; }}
+                            .skill-tags span {{ background: #eef4f1; padding: .8mm 1.5mm; border-radius: 1mm; font-size: .85em; overflow-wrap: anywhere; }}
+                            .skill-list {{ overflow-wrap: anywhere; }}
+                            .skill-columns {{ columns: 2; column-gap: 4mm; padding-left: 4mm; margin: 1.2mm 0; }}
+                            .skill-columns li {{ break-inside: avoid; overflow-wrap: anywhere; margin-bottom: .8mm; }}
                             ul {{ margin: 1mm 0 1mm 5mm; padding-left: 3mm; }}
                             li {{ margin-bottom: 1mm; overflow-wrap: anywhere; }}
                             a {{ color: inherit; overflow-wrap: anywhere; text-decoration: underline; }}
@@ -188,15 +241,15 @@ class PDFService:
             </style>
           </head>
           <body>
-                        <article class="resume resume-{escape(template, quote=True)}">
-                            <header class="resume-header">
+                            <article class="resume resume-{escape(template, quote=True)} divider-{resume.settings.dividerStyle}">
+                            <header class="resume-header header-{resume.settings.headerLayout}">
                                 <div class="identity">
                                     <h1>{escape(resume.personal.name or 'Your name')}</h1>
                                     <p class="title">{escape(resume.personal.title or 'Professional title')}</p>
                                 </div>
               <div class="contact">{contact}</div>
                             </header>
-                            <main class="resume-sections">{''.join(sections)}</main>
+                            {sections_markup}
                         </article>
           </body>
         </html>

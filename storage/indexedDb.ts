@@ -23,7 +23,7 @@ function openDatabase(): Promise<IDBDatabase> {
 }
 
 export async function loadResume(id = 'active'): Promise<Resume> {
-  if (typeof indexedDB === 'undefined') return structuredClone(defaultResume);
+  if (typeof indexedDB === 'undefined') throw new Error('Browser storage is not available');
   let db: IDBDatabase | undefined;
   try {
     db = await openDatabase();
@@ -40,15 +40,13 @@ export async function loadResume(id = 'active'): Promise<Resume> {
       ? (value as StoredDocument).resume
       : value;
     return normalizeResume(candidate);
-  } catch {
-    return structuredClone(defaultResume);
   } finally {
     db?.close();
   }
 }
 
 export async function saveResume(resume: Resume, id = 'active'): Promise<void> {
-  if (typeof indexedDB === 'undefined') return;
+  if (typeof indexedDB === 'undefined') throw new Error('Browser storage is not available');
   const db = await openDatabase();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -66,7 +64,7 @@ export async function saveResume(resume: Resume, id = 'active'): Promise<void> {
 function historyKey(id: string) { return `history:${id}`; }
 
 export async function loadResumeSnapshots(id = 'active'): Promise<ResumeSnapshot[]> {
-  if (typeof indexedDB === 'undefined') return [];
+  if (typeof indexedDB === 'undefined') throw new Error('Browser storage is not available');
   const db = await openDatabase();
   try {
     const value = await new Promise<unknown>((resolve, reject) => {
@@ -80,15 +78,13 @@ export async function loadResumeSnapshots(id = 'active'): Promise<ResumeSnapshot
     return value.filter((item): item is ResumeSnapshot => Boolean(item && typeof item === 'object' && 'resume' in item && 'createdAt' in item))
       .map(item => ({ ...item, resume: normalizeResume(item.resume) }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  } catch {
-    return [];
   } finally {
     db.close();
   }
 }
 
 export async function saveResumeSnapshot(resume: Resume, id = 'active'): Promise<ResumeSnapshot[]> {
-  if (typeof indexedDB === 'undefined') return [];
+  if (typeof indexedDB === 'undefined') throw new Error('Browser storage is not available');
   const db = await openDatabase();
   try {
     return await new Promise<ResumeSnapshot[]>((resolve, reject) => {

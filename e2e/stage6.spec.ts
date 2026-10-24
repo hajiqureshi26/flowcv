@@ -57,8 +57,34 @@ test('print export contains only paginated resume pages, not editor chrome', asy
   await expect(page.locator('.preview-toolbar')).toBeHidden();
   await expect(page.locator('.page-frame .resume-header h1')).toBeVisible();
   await expect(page.locator('.measurement-root')).toBeHidden();
+  await expect(page.locator('.page-frame').first()).toHaveCSS('filter', 'none');
+  const contactSeparator = await page.locator('.contact-line span+span').first().evaluate(element => getComputedStyle(element, '::before').content);
+  expect(contactSeparator).toContain('|');
 
   const pdf = await page.pdf({ preferCSSPageSize: true });
   expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  expect(pdf.toString('latin1')).not.toContain('/Subtype /Image');
+  expect(pdf.toString('latin1')).toContain('/Font');
   expect(await page.locator('.page-frame').count()).toBeGreaterThan(0);
+});
+
+test('profile and project edits update the preview while its independent scroll stays put',async({page})=>{
+  await page.setViewportSize({width:1440,height:1000});
+  await page.goto('/editor?resumeId=preview-sync-audit');
+  const canvas=page.locator('.canvas-scroll');
+  await page.locator('.section-open').filter({hasText:'Profile'}).click();
+  const summary=page.locator('.section-card.is-active [contenteditable="true"]');
+  await summary.fill('Live profile synchronization check.');
+  const profile=page.locator('.page-frame .resume-section').filter({has:page.getByRole('heading',{name:'Profile'})});
+  await expect(profile).toContainText('Live profile synchronization check.');
+  await canvas.evaluate(el=>{el.scrollTop=Math.max(0,Math.min(260,el.scrollHeight-el.clientHeight));});
+  const before=await canvas.evaluate(el=>el.scrollTop);
+  await summary.press('End');
+  await summary.type(' A further edit.');
+  await expect(profile).toContainText('A further edit.');
+  const after=await canvas.evaluate(el=>el.scrollTop);
+  expect(Math.abs(after-before)).toBeLessThanOrEqual(2);
+  await page.locator('.section-open').filter({hasText:'Projects'}).click();
+  await page.getByLabel('Project name').fill('Instant preview project');
+  await expect(page.locator('.page-frame [data-entry-id="proj-1"]')).toContainText('Instant preview project');
 });

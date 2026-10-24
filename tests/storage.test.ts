@@ -1,9 +1,10 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultResume } from '../resume/defaults';
 import { loadResume, loadResumeSnapshots, saveResume, saveResumeSnapshot } from '../storage/indexedDb';
 
 describe('IndexedDB resume storage',()=>{
+  afterEach(()=>vi.unstubAllGlobals());
   beforeEach(async()=>{await new Promise<void>(resolve=>{const req=indexedDB.deleteDatabase('folio-resume-v1');req.onsuccess=()=>resolve();req.onerror=()=>resolve();req.onblocked=()=>resolve();});});
   it('saves and restores content across loads',async()=>{
     const resume=structuredClone(defaultResume);resume.personal.name='Saved Candidate';resume.experience[0].title='Persisted role';
@@ -31,5 +32,11 @@ describe('IndexedDB resume storage',()=>{
     expect(versions).toHaveLength(12);
     expect(versions[0].resume.personal.name).toBe('Snapshot 13');
     expect((await loadResume()).personal.name).toBe('Current Document');
+  });
+  it('reports unavailable storage instead of returning an unsaved default document',async()=>{
+    vi.stubGlobal('indexedDB',undefined);
+    await expect(loadResume()).rejects.toThrow('Browser storage is not available');
+    await expect(loadResumeSnapshots()).rejects.toThrow('Browser storage is not available');
+    await expect(saveResume(structuredClone(defaultResume))).rejects.toThrow('Browser storage is not available');
   });
 });

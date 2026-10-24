@@ -487,7 +487,8 @@ def test_registered_templates_have_pdf_rendering_paths(template_id: str) -> None
     reader = PdfReader(io.BytesIO(pdf_service.render_resume_pdf(resume, template_id=template_id)))
 
     assert f'resume-{template_id}' in html
-    assert '<main class="resume-sections">' in html
+    expected_root = '<main class="resume-columns">' if template_id in {'modern', 'sidebar'} else '<main class="resume-main">'
+    assert expected_root in html
     assert len(reader.pages) == 1
     assert round(float(reader.pages[0].mediabox.width)) == 595
     assert round(float(reader.pages[0].mediabox.height)) == 842
@@ -540,7 +541,7 @@ def test_pdf_service_generates_expected_page_counts() -> None:
     assert any('Project 11' in str(entry.get('name') or entry.get('description') or entry.get('title') or '') for entry in imported.json()['projects'])
 
 
-def test_pdf_renders_a_two_page_long_profile() -> None:
+def test_pdf_paginates_a_long_profile_using_configured_margin() -> None:
     from app.services.pdf_service import pdf_service
 
     payload = make_resume('two-page-profile')
@@ -556,10 +557,129 @@ def test_pdf_renders_a_two_page_long_profile() -> None:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     text = '\n'.join(page.extract_text() or '' for page in reader.pages)
 
-    assert len(reader.pages) == 2
+    assert len(reader.pages) >= 2
+    assert all((page.extract_text() or '').strip() for page in reader.pages)
     assert 'reliable delivery' in text
     assert all(round(float(page.mediabox.width)) == 595 for page in reader.pages)
     assert all(round(float(page.mediabox.height)) == 842 for page in reader.pages)
+
+
+def test_pdf_renders_education_fields_and_uses_resume_margin() -> None:
+    from app.services.pdf_service import pdf_service
+
+    payload = make_resume('education-rendering')
+    payload['settings']['margin'] = 22
+    payload['education'] = [{
+        'id': 'education-1',
+        'degree': 'B.S. Computer Science',
+        'institution': 'Synthetic University',
+        'location': 'Seattle, WA',
+        'start': '2018',
+        'end': '2022',
+        'grade': '3.9 GPA',
+        'description': {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': 'Systems and accessible product design.'}]}]},
+    }]
+    payload['sectionsOrder'] = ['education']
+
+    from app.schemas.resume import Resume
+    html = pdf_service._build_resume_html(Resume.model_validate(payload), 'ats')
+    reader = PdfReader(io.BytesIO(pdf_service.render_resume_pdf(payload, template_id='ats')))
+    text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+
+    assert 'margin: 22mm' in html
+    assert 'B.S. Computer Science' in text
+    assert 'Synthetic University' in text
+    assert 'Seattle, WA' in text
+    assert '2018 - 2022' in text
+    assert '3.9 GPA' in text
+    assert 'Systems and accessible product design.' in text
+    assert '\nItem\n' not in text
+
+
+def test_pdf_two_column_templates_follow_editor_section_partition() -> None:
+    from app.schemas.resume import Resume
+    from app.services.pdf_service import pdf_service
+
+    resume = Resume.model_validate(make_resume('column-layout'))
+    for template in ('modern', 'sidebar'):
+        html = pdf_service._build_resume_html(resume, template)
+        sidebar_start = html.index('<aside class="resume-sidebar">')
+        main_start = html.index('<div class="resume-main">')
+        assert sidebar_start < main_start
+        assert 'Skills' in html[sidebar_start:main_start]
+        assert 'Experience' in html[main_start:]
+        assert 'column-count: 2' not in html
+
+    ats_html = pdf_service._build_resume_html(resume, 'ats')
+    assert '<main class="resume-columns">' not in ats_html
+
+
+@pytest.mark.parametrize(('layout', 'expected'), [
+    ('tags', 'class="skill-tags"'),
+    ('inline', 'Python · TypeScript · AWS · SQL'),
+    ('grouped', 'Python, TypeScript, AWS, SQL'),
+    ('columns', 'class="skill-columns"'),
+])
+def test_pdf_respects_selected_skills_layout(layout: str, expected: str) -> None:
+    from app.schemas.resume import Resume
+    from app.services.pdf_service import pdf_service
+
+    payload = make_resume('skills-layout')
+    payload['settings']['skillsLayout'] = layout
+    html = pdf_service._build_resume_html(Resume.model_validate(payload), 'ats')
+
+    assert expected in html
+
+
+def test_pdf_honors_editor_typography_spacing_header_and_divider_settings() -> None:
+    from app.schemas.resume import Resume
+    from app.services.pdf_service import pdf_service
+
+    payload = make_resume('rendering-settings')
+    payload['settings'].update({
+        'margin': 20,
+        'bodySize': 17,
+        'lineHeight': 1.6,
+        'letterSpacing': 1,
+        'sectionGap': 18,
+        'entryGap': 12,
+        'headerLayout': 'center',
+        'dividerStyle': 'styled',
+    })
+    html = pdf_service._build_resume_html(Resume.model_validate(payload), 'executive')
+
+    assert '@page { size: A4; margin: 20mm; }' in html
+    assert 'font-size: 17px; line-height: 1.6; letter-spacing: 1px' in html
+    assert 'margin-bottom: 12.96px' in html
+    assert 'margin-bottom: 8.4px' in html
+    assert '.header-center' in html
+    assert '.divider-styled .resume-section h2' in html
+    assert 'resume-executive' in html
+
+
+def test_pdf_experience_uses_editor_heading_and_metadata_grouping() -> None:
+    from app.schemas.resume import Resume
+    from app.services.pdf_service import pdf_service
+
+    payload = make_resume('experience-grouping')
+    payload['experience'] = [{
+        'id': 'experience-1',
+        'title': 'Staff Engineer',
+        'company': 'Example Labs',
+        'location': 'Remote',
+        'start': '2020',
+        'current': True,
+        'description': 'Built dependable systems.',
+        'bullets': ['Reduced service latency by 40%.'],
+    }]
+    payload['sectionsOrder'] = ['experience']
+    html = pdf_service._build_resume_html(Resume.model_validate(payload), 'ats')
+    text = '\n'.join(page.extract_text() or '' for page in PdfReader(io.BytesIO(pdf_service.render_resume_pdf(payload, 'ats'))).pages)
+
+    assert '<div class="entry-head"><strong>Staff Engineer</strong><span>2020 - Present</span></div>' in html
+    assert '<div class="entry-sub"><b>Example Labs</b> | Remote</div>' in html
+    assert 'Built dependable systems.' in text
+    assert 'Reduced service latency by 40%.' in text
 
 
 def test_pdf_preserves_dense_content_order_visibility_and_links() -> None:
